@@ -46,11 +46,11 @@ sdks/swift
 
 ## Add The SDK To A Swift Package
 
-From GitHub releases (recommended for apps/libraries):
+From GitHub releases (recommended):
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/avias8/spacetimedb-swift.git", from: "0.20.0"),
+    .package(url: "https://github.com/avias8/spacetimedb-swift.git", from: "0.21.0"),
 ],
 targets: [
     .executableTarget(
@@ -62,7 +62,7 @@ targets: [
 ]
 ```
 
-From a local monorepo checkout:
+From a local checkout:
 
 ```swift
 dependencies: [

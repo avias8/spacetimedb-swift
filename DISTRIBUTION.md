@@ -34,13 +34,13 @@ tools/swift-package-mirror.sh sync --mirror ../spacetimedb-swift
 Create release commit + tag:
 
 ```bash
-tools/swift-package-mirror.sh release --mirror ../spacetimedb-swift --version 0.20.0
+tools/swift-package-mirror.sh release --mirror ../spacetimedb-swift --version 0.21.0
 ```
 
 Create release and push:
 
 ```bash
-tools/swift-package-mirror.sh release --mirror ../spacetimedb-swift --version 0.20.0 --push
+tools/swift-package-mirror.sh release --mirror ../spacetimedb-swift --version 0.21.0 --push
 ```
 
 ## Swift Package Index Submission

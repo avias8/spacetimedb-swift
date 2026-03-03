@@ -1,13 +1,12 @@
 # Changelog
 
-## 0.20.0 - 2026-03-02
+## 0.21.0 - 2026-03-03
 
-- Mirrored `sdks/swift` from upstream `swift-integration` through commit `9874e3c2f`.
-- Included Ninja Swift demo rendering-path compatibility fixes.
-- Split protocol messaging into `ClientMessage`, `ServerMessage`, and `ProtocolTypes`.
-- Removed legacy `ProtocolMessages.swift` in favor of the new protocol layout.
-- Added protocol parity and concurrency-related test coverage.
-- Expanded benchmark coverage with generated-bindings benchmarks.
-- Updated package platform declarations for current Apple SDK targets.
-- Refreshed distribution and SPI release runbook defaults to `0.20.0`.
-- Added mirror README install snippet for GitHub package consumption.
+- Mirrored `sdks/swift` from upstream `swift-integration` through commit `3ee44cea6`.
+- Completed NW transport integration by adding `NWWebSocketTransport`.
+- Updated `SpacetimeClient` for Swift 6 performance and concurrency improvements.
+- Updated SDK surface wiring in `SpacetimeDB.swift` for the new transport/client behavior.
+- Included generated/demo compatibility updates used by Ninja and keynote Swift clients.
+- Refreshed mirror README dependency snippet for release consumption from GitHub.
+- Updated distribution runbook examples to release as `0.21.0`.
+- Updated SPI checklist release version default to `0.21.0`.
