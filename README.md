@@ -243,18 +243,19 @@ The Swift package is validated in CI for reproducibility and packaging health:
 - demo package builds
 - benchmark smoke run
 
-Dependency versions are pinned in `sdks/swift/Package.resolved` to avoid accidental drift.
+Dependency versions are pinned in `Package.resolved` to avoid accidental drift.
 
-For public SPM/SPI distribution from this monorepo, use the mirror runbook and automation:
+For release/distribution process details, use:
 
-- `sdks/swift/DISTRIBUTION.md`
-- `tools/swift-package-mirror.sh`
+- `PUBLISHING.md`
+- `DISTRIBUTION.md`
+- `SPI_SUBMISSION_CHECKLIST.md`
 
 ## DocC and Swift Package Index
 
 DocC bundle and tutorials live in:
 
-- `sdks/swift/Sources/SpacetimeDB/SpacetimeDB.docc`
+- `Sources/SpacetimeDB/SpacetimeDB.docc`
 
 DocC build command:
 
@@ -264,20 +265,20 @@ tools/swift-docc-smoke.sh
 
 Swift Package Index builder config is in:
 
-- `sdks/swift/.spi.yml`
+- `.spi.yml`
 
 Detailed publishing runbook:
 
-- `sdks/swift/PUBLISHING.md`
-- `sdks/swift/DISTRIBUTION.md`
-- `sdks/swift/SPI_SUBMISSION_CHECKLIST.md`
+- `PUBLISHING.md`
+- `DISTRIBUTION.md`
+- `SPI_SUBMISSION_CHECKLIST.md`
 
-Swift Package Index link and badge templates (replace `<owner>/<repo>` with mirror coordinates):
+Swift Package Index links and badges:
 
 ```text
-Package: https://swiftpackageindex.com/<owner>/<repo>
-Swift versions badge: https://img.shields.io/endpoint?url=https://swiftpackageindex.com/api/packages/<owner>/<repo>/badge?type=swift-versions
-Platforms badge: https://img.shields.io/endpoint?url=https://swiftpackageindex.com/api/packages/<owner>/<repo>/badge?type=platforms
+Package: https://swiftpackageindex.com/avias8/spacetimedb-swift
+Swift versions badge: https://img.shields.io/endpoint?url=https://swiftpackageindex.com/api/packages/avias8/spacetimedb-swift/badge?type=swift-versions
+Platforms badge: https://img.shields.io/endpoint?url=https://swiftpackageindex.com/api/packages/avias8/spacetimedb-swift/badge?type=platforms
 ```
 
 ## Apple CI Matrix
