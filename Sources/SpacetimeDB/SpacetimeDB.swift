@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 public enum CompressionMode: String, Sendable {
     case none = "None"
@@ -73,54 +74,107 @@ public enum ConnectionState: Sendable, Equatable {
     case reconnecting
 }
 
-@MainActor
 public final class SubscriptionHandle: @unchecked Sendable {
+    private struct UnsafeSendable<Value>: @unchecked Sendable {
+        var value: Value
+    }
+
+    private struct State {
+        var state: SubscriptionState = .pending
+        var querySetId: QuerySetId?
+        var requestId: RequestId?
+        var onApplied: UnsafeSendable<(() -> Void)?> = UnsafeSendable(value: nil)
+        var onError: UnsafeSendable<((String) -> Void)?> = UnsafeSendable(value: nil)
+    }
+
     public let queries: [String]
-    public private(set) var state: SubscriptionState = .pending
+    private let stateLock: Mutex<State> = Mutex(State())
 
-    var querySetId: UInt32?
-    var requestId: UInt32?
+    public var state: SubscriptionState {
+        stateLock.withLock { state in
+            state.state
+        }
+    }
+
+    var querySetId: QuerySetId? {
+        stateLock.withLock { state in
+            state.querySetId
+        }
+    }
+    
+    var requestId: RequestId? {
+        stateLock.withLock { state in
+            state.requestId
+        }
+    }
+    
     weak var client: SpacetimeClient?
-    var onApplied: (() -> Void)?
-    var onError: ((String) -> Void)?
 
-    init(queries: [String], client: SpacetimeClient, onApplied: (() -> Void)?, onError: ((String) -> Void)?) {
+    init(
+        queries: [String],
+        client: SpacetimeClient,
+        onApplied: (() -> Void)?,
+        onError: ((String) -> Void)?
+    ) {
         self.queries = queries
         self.client = client
-        self.onApplied = onApplied
-        self.onError = onError
+        stateLock.withLock { state in
+            state.onApplied.value = onApplied
+            state.onError.value = onError
+        }
     }
 
     public func unsubscribe(sendDroppedRows: Bool = false) {
         client?.unsubscribe(self, sendDroppedRows: sendDroppedRows)
     }
 
-    func markPending(requestId: UInt32, querySetId: UInt32) {
-        self.requestId = requestId
-        self.querySetId = querySetId
-        self.state = .pending
+    func markPending(requestId: RequestId, querySetId: QuerySetId) {
+        stateLock.withLock { state in
+            state.requestId = requestId
+            state.querySetId = querySetId
+            state.state = .pending
+        }
     }
 
-    func markApplied(querySetId: UInt32) {
-        self.requestId = nil
-        self.querySetId = querySetId
-        self.state = .active
-        onApplied?()
+    func markApplied(querySetId: QuerySetId) {
+        let applied = stateLock.withLock { state in
+            state.requestId = nil
+            state.querySetId = querySetId
+            state.state = .active
+            return state.onApplied.value
+        }
+        
+        if let applied {
+            Task { @MainActor in
+                applied()
+            }
+        }
     }
 
     func markError(_ message: String) {
-        self.state = .ended
-        onError?(message)
-        onApplied = nil
-        onError = nil
+        let error = stateLock.withLock { state in
+            state.state = .ended
+            let callback = state.onError.value
+            state.onApplied.value = nil
+            state.onError.value = nil
+            return callback
+        }
+        
+        if let error {
+            Task { @MainActor in
+                error(message)
+            }
+        }
     }
 
     func markEnded() {
-        self.state = .ended
-        self.requestId = nil
-        self.querySetId = nil
-        onApplied = nil
-        onError = nil
+        stateLock.withLock { state in
+            state.state = .ended
+            state.requestId = nil
+            state.querySetId = nil
+            state.onApplied.value = nil
+            state.onError.value = nil
+        }
     }
 }
 

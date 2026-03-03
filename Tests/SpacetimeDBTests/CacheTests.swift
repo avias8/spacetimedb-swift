@@ -40,6 +40,7 @@ final class CacheTests: XCTestCase {
         let transactionUpdate = try decoder.decode(TransactionUpdate.self, from: rawPayload)
 
         clientCache.applyTransactionUpdate(transactionUpdate)
+        personCache.sync()
 
         XCTAssertEqual(personCache.rows.count, 1)
         XCTAssertEqual(personCache.rows[0].id, 42)
@@ -60,6 +61,7 @@ final class CacheTests: XCTestCase {
 
         let secondCache: TableCache<Person> = clientCache.getTableCache(tableName: "Person")
         XCTAssertTrue(firstCache === secondCache)
+        secondCache.sync()
         XCTAssertEqual(secondCache.rows.count, 1)
         XCTAssertEqual(secondCache.rows[0].id, 7)
         XCTAssertEqual(secondCache.rows[0].name, "Bob")
@@ -75,34 +77,34 @@ final class CacheTests: XCTestCase {
         let oldBytes = try encoder.encode(oldRow)
         let newBytes = try encoder.encode(newRow)
 
-        var inserts: [Person] = []
-        var deletes: [Person] = []
-        var updates: [(Person, Person)] = []
+        let inserts = LockIsolated<[Person]>([])
+        let deletes = LockIsolated<[Person]>([])
+        let updates = LockIsolated<[(Person, Person)]>([])
 
-        let insertHandle = cache.onInsert { inserts.append($0) }
-        let deleteHandle = cache.onDelete { deletes.append($0) }
+        let insertHandle = cache.onInsert { person in inserts.withValue { $0.append(person) } }
+        let deleteHandle = cache.onDelete { person in deletes.withValue { $0.append(person) } }
         let updateHandle = cache.onUpdate { old, new in
-            updates.append((old, new))
+            updates.withValue { $0.append((old, new)) }
         }
 
         try cache.handleInsert(rowBytes: oldBytes)
         try cache.handleUpdate(oldRowBytes: oldBytes, newRowBytes: newBytes)
         try cache.handleDelete(rowBytes: newBytes)
 
-        XCTAssertEqual(inserts, [oldRow])
-        XCTAssertEqual(deletes, [newRow])
-        XCTAssertEqual(updates.count, 1)
-        XCTAssertEqual(updates[0].0, oldRow)
-        XCTAssertEqual(updates[0].1, newRow)
+        XCTAssertEqual(inserts.value, [oldRow])
+        XCTAssertEqual(deletes.value, [newRow])
+        XCTAssertEqual(updates.value.count, 1)
+        XCTAssertEqual(updates.value[0].0, oldRow)
+        XCTAssertEqual(updates.value[0].1, newRow)
 
         insertHandle.cancel()
         deleteHandle.cancel()
         updateHandle.cancel()
 
         try cache.handleInsert(rowBytes: oldBytes)
-        XCTAssertEqual(inserts, [oldRow])
-        XCTAssertEqual(deletes, [newRow])
-        XCTAssertEqual(updates.count, 1)
+        XCTAssertEqual(inserts.value, [oldRow])
+        XCTAssertEqual(deletes.value, [newRow])
+        XCTAssertEqual(updates.value.count, 1)
     }
 
     @MainActor
@@ -119,17 +121,17 @@ final class CacheTests: XCTestCase {
 
         try personCache.handleInsert(rowBytes: oldBytes)
 
-        var updates: [(Person, Person)] = []
+        let updates = LockIsolated<[(Person, Person)]>([])
         let updateHandle = personCache.onUpdate { old, new in
-            updates.append((old, new))
+            updates.withValue { $0.append((old, new)) }
         }
 
         let update = TransactionUpdate(querySets: [
             QuerySetUpdate(
-                querySetId: 1,
+                querySetId: QuerySetId(rawValue: 1),
                 tables: [
                     TableUpdate(
-                        tableName: "Person",
+                        tableName: RawIdentifier(rawValue: "Person"),
                         rows: [
                             .persistentTable(
                                 PersistentTableRows(
@@ -144,11 +146,12 @@ final class CacheTests: XCTestCase {
         ])
 
         clientCache.applyTransactionUpdate(update)
+        personCache.sync()
 
         XCTAssertEqual(personCache.rows, [newRow])
-        XCTAssertEqual(updates.count, 1)
-        XCTAssertEqual(updates[0].0, oldRow)
-        XCTAssertEqual(updates[0].1, newRow)
+        XCTAssertEqual(updates.value.count, 1)
+        XCTAssertEqual(updates.value[0].0, oldRow)
+        XCTAssertEqual(updates.value[0].1, newRow)
 
         updateHandle.cancel()
     }

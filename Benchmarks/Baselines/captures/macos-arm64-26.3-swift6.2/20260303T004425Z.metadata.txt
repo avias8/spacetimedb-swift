@@ -1,0 +1,10 @@
+baseline_name=macos-arm64-26.3-swift6.2
+captured_at_utc=20260303T004425Z
+git_head=accb4478088420b1d169bdfeb0f4de7b37acf6d0
+swift_version=swift-driver version: 1.127.14.1 Apple Swift version 6.2.3 (swiftlang-6.2.3.3.21 clang-1700.6.3.2) Target: arm64-apple-macosx26.0 
+os_product_version=26.3
+os_build_version=25D125
+kernel=Darwin 25.3.0
+arch=arm64
+update_command=swift package --allow-writing-to-package-directory benchmark baseline update macos-arm64-26.3-swift6.2 --target SpacetimeDBBenchmarks --benchmark-build-configuration release --no-progress 
+read_command=swift package benchmark baseline read macos-arm64-26.3-swift6.2 --target SpacetimeDBBenchmarks --format jsonSmallerIsBetter --path stdout --no-progress 

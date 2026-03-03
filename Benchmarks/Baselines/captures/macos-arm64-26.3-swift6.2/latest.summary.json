@@ -1,0 +1,110 @@
+[
+  {
+    "unit" : "ns",
+    "value" : 2667,
+    "name" : "BSATN Decode GameState (20 players) - Time (wall clock)",
+    "extra" : "80th percentile: 2251\n95th percentile: 2333"
+  },
+  {
+    "unit" : "ns",
+    "value" : 458,
+    "name" : "BSATN Decode PlayerRow - Time (wall clock)",
+    "extra" : "80th percentile: 334\n95th percentile: 375"
+  },
+  {
+    "unit" : "ns",
+    "value" : 334,
+    "name" : "BSATN Decode Point3D - Time (wall clock)",
+    "extra" : "80th percentile: 250\n95th percentile: 292"
+  },
+  {
+    "unit" : "μs",
+    "value" : 25,
+    "name" : "BSATN Encode GameState (20 players) - Time (wall clock)",
+    "extra" : "80th percentile: 14\n95th percentile: 15"
+  },
+  {
+    "unit" : "ns",
+    "value" : 1208,
+    "name" : "BSATN Encode PlayerRow - Time (wall clock)",
+    "extra" : "80th percentile: 1083\n95th percentile: 1125"
+  },
+  {
+    "unit" : "ns",
+    "value" : 291,
+    "name" : "BSATN Encode Point3D - Time (wall clock)",
+    "extra" : "80th percentile: 209\n95th percentile: 250"
+  },
+  {
+    "unit" : "μs",
+    "value" : 833,
+    "name" : "Cache Delete 500 rows from full - Time (wall clock)",
+    "extra" : "80th percentile: 741\n95th percentile: 792"
+  },
+  {
+    "unit" : "μs",
+    "value" : 183,
+    "name" : "Cache Insert 100 rows - Time (wall clock)",
+    "extra" : "80th percentile: 101\n95th percentile: 120"
+  },
+  {
+    "unit" : "μs",
+    "value" : 1300,
+    "name" : "Cache Insert 1000 rows - Time (wall clock)",
+    "extra" : "80th percentile: 996\n95th percentile: 1058"
+  },
+  {
+    "extra" : "80th percentile: 1098\n95th percentile: 1163",
+    "name" : "Cache Sync (1000 rows) - Time (wall clock)",
+    "unit" : "μs",
+    "value" : 1240
+  },
+  {
+    "extra" : "80th percentile: 542\n95th percentile: 583",
+    "name" : "Message Decode InitialConnection - Time (wall clock)",
+    "unit" : "ns",
+    "value" : 666
+  },
+  {
+    "extra" : "80th percentile: 333\n95th percentile: 334",
+    "name" : "Message Decode SubscriptionError - Time (wall clock)",
+    "unit" : "ns",
+    "value" : 417
+  },
+  {
+    "extra" : "80th percentile: 542\n95th percentile: 584",
+    "name" : "Message Decode TransactionUpdate (single table) - Time (wall clock)",
+    "unit" : "ns",
+    "value" : 667
+  },
+  {
+    "extra" : "80th percentile: 833\n95th percentile: 875",
+    "name" : "Message Encode CallProcedure (128-byte args) - Time (wall clock)",
+    "unit" : "ns",
+    "value" : 917
+  },
+  {
+    "extra" : "80th percentile: 750\n95th percentile: 792",
+    "name" : "Message Encode CallReducer (128-byte args) - Time (wall clock)",
+    "unit" : "ns",
+    "value" : 875
+  },
+  {
+    "extra" : "80th percentile: 833\n95th percentile: 875",
+    "name" : "Message Encode Subscribe - Time (wall clock)",
+    "unit" : "ns",
+    "value" : 917
+  },
+  {
+    "extra" : "80th percentile: 1541\n95th percentile: 1625",
+    "name" : "RoundTrip Procedure (encode request + decode result) - Time (wall clock)",
+    "unit" : "ns",
+    "value" : 3083
+  },
+  {
+    "extra" : "80th percentile: 1375\n95th percentile: 1417",
+    "name" : "RoundTrip Reducer (encode request + decode result) - Time (wall clock)",
+    "unit" : "ns",
+    "value" : 1625
+  }
+]

@@ -46,7 +46,23 @@ sdks/swift
 
 ## Add The SDK To A Swift Package
 
-From a local checkout:
+From GitHub releases (recommended for apps/libraries):
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/avias8/spacetimedb-swift.git", from: "0.20.0"),
+],
+targets: [
+    .executableTarget(
+        name: "MyClient",
+        dependencies: [
+            .product(name: "SpacetimeDB", package: "SpacetimeDB"),
+        ]
+    ),
+]
+```
+
+From a local monorepo checkout:
 
 ```swift
 dependencies: [
@@ -243,19 +259,18 @@ The Swift package is validated in CI for reproducibility and packaging health:
 - demo package builds
 - benchmark smoke run
 
-Dependency versions are pinned in `Package.resolved` to avoid accidental drift.
+Dependency versions are pinned in `sdks/swift/Package.resolved` to avoid accidental drift.
 
-For release/distribution process details, use:
+For public SPM/SPI distribution from this monorepo, use the mirror runbook and automation:
 
-- `PUBLISHING.md`
-- `DISTRIBUTION.md`
-- `SPI_SUBMISSION_CHECKLIST.md`
+- `sdks/swift/DISTRIBUTION.md`
+- `tools/swift-package-mirror.sh`
 
 ## DocC and Swift Package Index
 
 DocC bundle and tutorials live in:
 
-- `Sources/SpacetimeDB/SpacetimeDB.docc`
+- `sdks/swift/Sources/SpacetimeDB/SpacetimeDB.docc`
 
 DocC build command:
 
@@ -265,20 +280,20 @@ tools/swift-docc-smoke.sh
 
 Swift Package Index builder config is in:
 
-- `.spi.yml`
+- `sdks/swift/.spi.yml`
 
 Detailed publishing runbook:
 
-- `PUBLISHING.md`
-- `DISTRIBUTION.md`
-- `SPI_SUBMISSION_CHECKLIST.md`
+- `sdks/swift/PUBLISHING.md`
+- `sdks/swift/DISTRIBUTION.md`
+- `sdks/swift/SPI_SUBMISSION_CHECKLIST.md`
 
-Swift Package Index links and badges:
+Swift Package Index link and badge templates (replace `<owner>/<repo>` with mirror coordinates):
 
 ```text
-Package: https://swiftpackageindex.com/avias8/spacetimedb-swift
-Swift versions badge: https://img.shields.io/endpoint?url=https://swiftpackageindex.com/api/packages/avias8/spacetimedb-swift/badge?type=swift-versions
-Platforms badge: https://img.shields.io/endpoint?url=https://swiftpackageindex.com/api/packages/avias8/spacetimedb-swift/badge?type=platforms
+Package: https://swiftpackageindex.com/<owner>/<repo>
+Swift versions badge: https://img.shields.io/endpoint?url=https://swiftpackageindex.com/api/packages/<owner>/<repo>/badge?type=swift-versions
+Platforms badge: https://img.shields.io/endpoint?url=https://swiftpackageindex.com/api/packages/<owner>/<repo>/badge?type=platforms
 ```
 
 ## Apple CI Matrix

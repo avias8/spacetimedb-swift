@@ -6,7 +6,9 @@ let package = Package(
     name: "SpacetimeDB",
     platforms: [
         .macOS(.v15),
-        .iOS(.v17)
+        .iOS(.v18),
+        .visionOS(.v2),
+        .watchOS(.v11)
     ],
     products: [
         .library(
@@ -36,6 +38,17 @@ let package = Package(
                 .product(name: "Benchmark", package: "package-benchmark"),
             ],
             path: "Benchmarks/SpacetimeDBBenchmarks",
+            plugins: [
+                .plugin(name: "BenchmarkPlugin", package: "package-benchmark"),
+            ]
+        ),
+        .executableTarget(
+            name: "GeneratedBindingsBenchmarks",
+            dependencies: [
+                "SpacetimeDB",
+                .product(name: "Benchmark", package: "package-benchmark"),
+            ],
+            path: "Benchmarks/GeneratedBindingsBenchmarks",
             plugins: [
                 .plugin(name: "BenchmarkPlugin", package: "package-benchmark"),
             ]

@@ -1,45 +1,59 @@
 import Foundation
+import Synchronization
 
 /// Holds the local state of all SpacetimeDB tables, routing updates from the WebSocket down to each table.
-@MainActor
-public final class ClientCache: @unchecked Sendable {
-    private var tables: [String: any SpacetimeTableCacheProtocol] = [:]
+public final class ClientCache: Sendable {
+    private struct State {
+        var tables: [String: any SpacetimeTableCacheProtocol] = [:]
+    }
 
-    public var registeredTableNames: Dictionary<String, any SpacetimeTableCacheProtocol>.Keys {
-        tables.keys
+    private let state: Mutex<State> = Mutex(State())
+
+    public var registeredTableNames: [String] {
+        state.withLock { state in
+            Array(state.tables.keys)
+        }
     }
 
     public init() {}
 
     /// Registers a new table cache for a given table name.
     public func registerTable<T: Decodable & Sendable>(tableName: String, rowType: T.Type) {
-        if let existing = self.tables[tableName] {
-            if existing is TableCache<T> {
-                // Idempotent re-registration: keep the existing cache instance so
-                // any replicated rows already loaded are preserved.
-                return
+        state.withLock { state in
+            if let existing = state.tables[tableName] {
+                if existing is TableCache<T> {
+                    // Idempotent re-registration: keep the existing cache instance so
+                    // any replicated rows already loaded are preserved.
+                    return
+                }
+                fatalError("Table \(tableName) already registered with a different row type.")
             }
-            fatalError("Table \(tableName) already registered with a different row type.")
+            let cache = TableCache<T>(tableName: tableName)
+            state.tables[tableName] = cache
         }
-        let cache = TableCache<T>(tableName: tableName)
-        self.tables[tableName] = cache
     }
 
     /// Registers a new table cache for a given table name.
     public func registerTable<T>(name: String, cache: TableCache<T>) {
-        if self.tables[name] != nil {
-            // Preserve the first registration to avoid replacing a live cache.
-            return
+        state.withLock { state in
+            if state.tables[name] != nil {
+                // Preserve the first registration to avoid replacing a live cache.
+                return
+            }
+            state.tables[name] = cache
         }
-        self.tables[name] = cache
     }
 
     public func getTable(name: String) -> (any SpacetimeTableCacheProtocol)? {
-        return self.tables[name]
+        state.withLock { state in
+            state.tables[name]
+        }
     }
 
     public func getTableCache<T: Decodable & Sendable>(tableName: String) -> TableCache<T> {
-        guard let table = self.tables[tableName] as? TableCache<T> else {
+        guard let table = state.withLock({ state in
+            state.tables[tableName] as? TableCache<T>
+        }) else {
             fatalError("Table \(tableName) not registered or of wrong type.")
         }
         return table
@@ -47,11 +61,20 @@ public final class ClientCache: @unchecked Sendable {
 
     /// Processes a TransactionUpdate payload from the network.
     public func applyTransactionUpdate(_ update: TransactionUpdate) {
+        var modifiedTables = Set<String>()
+
+        let tablesSnapshot = state.withLock { state in
+            state.tables
+        }
+
         for querySet in update.querySets {
             for tableUpdate in querySet.tables {
-                guard let tableCache = self.tables[tableUpdate.tableName] else {
+                let tableName = tableUpdate.tableName.rawValue
+                guard let tableCache = tablesSnapshot[tableName] else {
                     continue
                 }
+                
+                modifiedTables.insert(tableName)
 
                 for rowUpdate in tableUpdate.rows {
                     switch rowUpdate {
@@ -60,24 +83,45 @@ public final class ClientCache: @unchecked Sendable {
                         let insertRows = self.extractRows(from: persistent.inserts)
                         let pairedCount = min(deleteRows.count, insertRows.count)
 
+                        
                         if pairedCount > 0 {
-                            for idx in 0..<pairedCount {
-                                self.applyRowUpdate(
-                                    oldData: deleteRows[idx],
-                                    newData: insertRows[idx],
-                                    tableCache: tableCache
+                            do {
+                                try tableCache.handleBulkUpdate(
+                                    oldRowBytesList: Array(deleteRows[..<pairedCount]),
+                                    newRowBytesList: Array(insertRows[..<pairedCount])
                                 )
+                            } catch {
+                                Log.cache.error("Failed to bulk update rows for table '\(tableName)': \(error.localizedDescription)")
                             }
                         }
 
                         if deleteRows.count > pairedCount {
-                            self.processRows(deleteRows[pairedCount...], tableCache: tableCache, isInsert: false)
+                            do {
+                                try tableCache.handleBulkDelete(rowBytesList: Array(deleteRows[pairedCount...]))
+                            } catch {
+                                Log.cache.error("Failed to bulk delete rows for table '\(tableName)': \(error.localizedDescription)")
+                            }
                         }
                         if insertRows.count > pairedCount {
-                            self.processRows(insertRows[pairedCount...], tableCache: tableCache, isInsert: true)
+                            do {
+                                try tableCache.handleBulkInsert(rowBytesList: Array(insertRows[pairedCount...]))
+                            } catch {
+                                Log.cache.error("Failed to bulk insert rows for table '\(tableName)': \(error.localizedDescription)")
+                            }
                         }
                     case .eventTable:
                         break
+                    }
+                }
+            }
+        }
+        
+        // After all background processing is done, sync modified tables to MainActor for UI observers
+        if !modifiedTables.isEmpty {
+            Task { @MainActor in
+                for tableName in modifiedTables {
+                    if let table = tablesSnapshot[tableName] as? (any ThreadSafeSyncable) {
+                        table.sync()
                     }
                 }
             }
@@ -97,7 +141,7 @@ public final class ClientCache: @unchecked Sendable {
             var offset = 0
             while offset < data.count {
                 let end = min(offset + rowSize, data.count)
-                rows.append(data.subdata(in: offset..<end))
+                rows.append(data[offset..<end])
                 offset += rowSize
             }
 
@@ -105,7 +149,7 @@ public final class ClientCache: @unchecked Sendable {
             for i in 0..<offsets.count {
                 let start = Int(offsets[i])
                 let end = (i + 1 < offsets.count) ? Int(offsets[i + 1]) : data.count
-                rows.append(data.subdata(in: start..<end))
+                rows.append(data[start..<end])
             }
         }
 
@@ -139,3 +183,10 @@ public final class ClientCache: @unchecked Sendable {
         }
     }
 }
+
+/// Helper protocol to allow ClientCache to call sync() without knowing the concrete type T
+private protocol ThreadSafeSyncable {
+    @MainActor func sync()
+}
+
+extension TableCache: ThreadSafeSyncable {}

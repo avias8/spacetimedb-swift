@@ -1,0 +1,102 @@
+[
+  {
+    "extra" : "80th percentile: 56\n95th percentile: 58",
+    "value" : 88,
+    "unit" : "μs",
+    "name" : "BSATN Decode GameState (20 players) - Time (wall clock)"
+  },
+  {
+    "extra" : "80th percentile: 2833\n95th percentile: 2917",
+    "value" : 3125,
+    "unit" : "ns",
+    "name" : "BSATN Decode PlayerRow - Time (wall clock)"
+  },
+  {
+    "extra" : "80th percentile: 1250\n95th percentile: 1333",
+    "value" : 1417,
+    "unit" : "ns",
+    "name" : "BSATN Decode Point3D - Time (wall clock)"
+  },
+  {
+    "extra" : "80th percentile: 66\n95th percentile: 72",
+    "value" : 98,
+    "unit" : "μs",
+    "name" : "BSATN Encode GameState (20 players) - Time (wall clock)"
+  },
+  {
+    "extra" : "80th percentile: 3583\n95th percentile: 3667",
+    "value" : 3875,
+    "unit" : "ns",
+    "name" : "BSATN Encode PlayerRow - Time (wall clock)"
+  },
+  {
+    "extra" : "80th percentile: 1167\n95th percentile: 1209",
+    "value" : 1292,
+    "unit" : "ns",
+    "name" : "BSATN Encode Point3D - Time (wall clock)"
+  },
+  {
+    "value" : 1817,
+    "unit" : "ms",
+    "name" : "Cache Delete 500 rows from full - Time (wall clock)"
+  },
+  {
+    "extra" : "80th percentile: 35\n95th percentile: 36",
+    "value" : 37,
+    "unit" : "ms",
+    "name" : "Cache Insert 100 rows - Time (wall clock)"
+  },
+  {
+    "value" : 3704,
+    "unit" : "ms",
+    "name" : "Cache Insert 1000 rows - Time (wall clock)"
+  },
+  {
+    "extra" : "80th percentile: 666\n95th percentile: 667",
+    "value" : 750,
+    "unit" : "ns",
+    "name" : "Message Decode InitialConnection - Time (wall clock)"
+  },
+  {
+    "extra" : "80th percentile: 375\n95th percentile: 416",
+    "value" : 458,
+    "unit" : "ns",
+    "name" : "Message Decode SubscriptionError - Time (wall clock)"
+  },
+  {
+    "extra" : "80th percentile: 875\n95th percentile: 917",
+    "value" : 1000,
+    "unit" : "ns",
+    "name" : "Message Decode TransactionUpdate (single table) - Time (wall clock)"
+  },
+  {
+    "extra" : "80th percentile: 875\n95th percentile: 958",
+    "value" : 1000,
+    "unit" : "ns",
+    "name" : "Message Encode CallProcedure (128-byte args) - Time (wall clock)"
+  },
+  {
+    "extra" : "80th percentile: 875\n95th percentile: 917",
+    "value" : 1000,
+    "unit" : "ns",
+    "name" : "Message Encode CallReducer (128-byte args) - Time (wall clock)"
+  },
+  {
+    "extra" : "80th percentile: 958\n95th percentile: 1000",
+    "value" : 1042,
+    "unit" : "ns",
+    "name" : "Message Encode Subscribe - Time (wall clock)"
+  },
+  {
+    "extra" : "80th percentile: 4251\n95th percentile: 4375",
+    "value" : 4667,
+    "unit" : "ns",
+    "name" : "RoundTrip Procedure (encode request + decode result) - Time (wall clock)"
+  },
+  {
+    "extra" : "80th percentile: 2459\n95th percentile: 2543",
+    "value" : 2667,
+    "unit" : "ns",
+    "name" : "RoundTrip Reducer (encode request + decode result) - Time (wall clock)"
+  }
+]

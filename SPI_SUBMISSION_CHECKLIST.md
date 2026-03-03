@@ -10,7 +10,7 @@ Use this checklist when releasing the standalone mirror repository for `sdks/swi
 export MIRROR_REPO="../spacetimedb-swift"
 export SPI_OWNER="<owner>"
 export SPI_REPO="<repo>"
-export SPI_VERSION="0.1.0"
+export SPI_VERSION="0.20.0"
 ```
 
 ## 1. One-Time Mirror Readiness
