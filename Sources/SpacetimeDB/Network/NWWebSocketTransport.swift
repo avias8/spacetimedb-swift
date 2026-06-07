@@ -26,6 +26,13 @@ final class NWWebSocketTransport: WebSocketTransport, @unchecked Sendable {
     private var didCompleteHandshake = false
     private var handshakeKey = ""
     private var incomingBuffer = Data()
+    // WebSocket message-fragmentation reassembly. A large server message (e.g. a
+    // big subscription snapshot) can be split across several WS frames: a leading
+    // data frame (text/binary) with FIN=0, then continuation frames (opcode 0x0),
+    // the last with FIN=1. We accumulate them here and only deliver the message
+    // once complete. Touched only under `stateLock` alongside `incomingBuffer`.
+    private var fragmentOpcode: UInt8?
+    private var fragmentBuffer = Data()
     private let queue = DispatchQueue(label: "spacetimedb.transport.nw", qos: .userInitiated)
 
     var delegate: WebSocketTransportDelegate? {
@@ -48,6 +55,8 @@ final class NWWebSocketTransport: WebSocketTransport, @unchecked Sendable {
             self.closingConnection = false
             self.didCompleteHandshake = false
             self.incomingBuffer.removeAll(keepingCapacity: true)
+            self.fragmentOpcode = nil
+            self.fragmentBuffer.removeAll(keepingCapacity: true)
             self.handshakeKey = Self.makeSecWebSocketKey()
             self.connection?.cancel()
             self.connection = connection
@@ -202,6 +211,8 @@ final class NWWebSocketTransport: WebSocketTransport, @unchecked Sendable {
             connection?.cancel()
             connection = nil
             incomingBuffer.removeAll(keepingCapacity: true)
+            fragmentOpcode = nil
+            fragmentBuffer.removeAll(keepingCapacity: true)
             didCompleteHandshake = false
         }
     }
@@ -252,7 +263,8 @@ final class NWWebSocketTransport: WebSocketTransport, @unchecked Sendable {
                 var frames: [(UInt8, Data)] = []
                 self.stateLock.withLock { _ in
                     self.incomingBuffer.append(content)
-                    frames = Self.parseFrames(from: &self.incomingBuffer)
+                    let raw = Self.parseFrames(from: &self.incomingBuffer)
+                    frames = self.reassemble(raw)
                 }
                 for (opcode, payload) in frames {
                     switch opcode {
@@ -315,8 +327,8 @@ final class NWWebSocketTransport: WebSocketTransport, @unchecked Sendable {
         return frame
     }
 
-    private static func parseFrames(from buffer: inout Data) -> [(UInt8, Data)] {
-        var frames: [(UInt8, Data)] = []
+    static func parseFrames(from buffer: inout Data) -> [(fin: Bool, opcode: UInt8, payload: Data)] {
+        var frames: [(fin: Bool, opcode: UInt8, payload: Data)] = []
         var index = 0
         while true {
             let start = index
@@ -325,6 +337,7 @@ final class NWWebSocketTransport: WebSocketTransport, @unchecked Sendable {
             let second = buffer[index + 1]
             index += 2
 
+            let fin = (first & 0x80) != 0
             let opcode = first & 0x0F
             let masked = (second & 0x80) != 0
             var payloadLength = Int(second & 0x7F)
@@ -362,11 +375,47 @@ final class NWWebSocketTransport: WebSocketTransport, @unchecked Sendable {
                     }
                 }
             }
-            frames.append((opcode, payload))
+            frames.append((fin, opcode, payload))
         }
         if index > 0 {
             buffer.removeSubrange(0..<index)
         }
         return frames
+    }
+
+    /// Collapse raw WebSocket frames into complete application messages,
+    /// reassembling fragmented data messages (a FIN=0 data frame followed by
+    /// continuation frames, the last with FIN=1). Control frames (close/ping/
+    /// pong) are never fragmented and pass through unchanged, even if they
+    /// arrive in the middle of a fragmented data message.
+    /// Must be called under `stateLock` (mutates the fragment buffer).
+    func reassemble(_ rawFrames: [(fin: Bool, opcode: UInt8, payload: Data)]) -> [(UInt8, Data)] {
+        var messages: [(UInt8, Data)] = []
+        for frame in rawFrames {
+            switch frame.opcode {
+            case 0x8, 0x9, 0xA:
+                // Control frame — deliver as-is, even mid-fragmentation.
+                messages.append((frame.opcode, frame.payload))
+            case 0x0:
+                // Continuation of an in-flight fragmented message.
+                guard let op = fragmentOpcode else { break } // stray continuation
+                fragmentBuffer.append(frame.payload)
+                if frame.fin {
+                    messages.append((op, fragmentBuffer))
+                    fragmentOpcode = nil
+                    fragmentBuffer = Data()
+                }
+            default:
+                // Data frame (0x1 text / 0x2 binary).
+                if frame.fin {
+                    messages.append((frame.opcode, frame.payload))
+                } else {
+                    // First frame of a fragmented message.
+                    fragmentOpcode = frame.opcode
+                    fragmentBuffer = frame.payload
+                }
+            }
+        }
+        return messages
     }
 }
