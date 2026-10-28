@@ -26,16 +26,16 @@ flowchart LR
 
 **Goal:** Achieve wire-protocol parity with the official Rust and TypeScript 2.13+ SDKs and isolate cache state per connection and per query set.
 
-- [ ] **WebSocket `v3` Protocol & Frame Batching**
-  - [ ] Negotiate `v3` WebSocket subprotocol alongside `v2.bsatn.spacetimedb`.
-  - [ ] Implement bounded multi-message outbound frame batching (`MAX_V3_OUTBOUND_FRAME_BYTES`) with same-turn coalescing and deferred yield flushes.
-  - [ ] Implement streaming `v3` multi-message inbound frame decoding.
-- [ ] **Per-Query-Set Cache Tracking**
-  - [ ] Track row membership by `QuerySetId` inside `ClientCache` and `TableCache`.
-  - [ ] Deterministically evict rows belonging to a failed or unsubscribed `QuerySetId` without requiring server-sent dropped rows or connection resets.
-- [ ] **Instance-Scoped `ClientCache`**
-  - [ ] Introduce connection-scoped `ClientCache` / `DbContext` instances on `SpacetimeClient` while preserving `SpacetimeClient.clientCache` as a backwards-compatible default.
-  - [ ] Support concurrent independent `SpacetimeClient` connections to multiple modules or rooms in the same process.
+- [x] **WebSocket `v3` Protocol & Frame Batching**
+  - [x] Negotiate `v3` WebSocket subprotocol alongside `v2.bsatn.spacetimedb`.
+  - [x] Implement bounded multi-message outbound frame batching (`MAX_V3_OUTBOUND_FRAME_BYTES`) with same-turn coalescing and deferred yield flushes.
+  - [x] Implement streaming `v3` multi-message inbound frame decoding.
+- [x] **Per-Query-Set Cache Tracking**
+  - [x] Track row membership by `QuerySetId` inside `ClientCache` and `TableCache`.
+  - [x] Deterministically evict rows belonging to a failed or unsubscribed `QuerySetId` without requiring server-sent dropped rows or connection resets.
+- [x] **Instance-Scoped `ClientCache`**
+  - [x] Introduce connection-scoped `ClientCache` / `DbContext` instances on `SpacetimeClient` while preserving `SpacetimeClient.clientCache` as a backwards-compatible default.
+  - [x] Support concurrent independent `SpacetimeClient` connections to multiple modules or rooms in the same process.
 
 ---
 
@@ -43,17 +43,17 @@ flowchart LR
 
 **Goal:** Deliver sub-millisecond indexed lookups, primary-key identity semantics, and compile-time checked subscription queries.
 
-- [ ] **Primary-Key Identity & Semantic `onUpdate` Pairing**
-  - [ ] Add `SpacetimePrimaryKeyRow` protocol and generated primary-key extractors.
-  - [ ] Key `TableCache` entries by primary key when available (matching Rust's `with_updates_by_pk` and TypeScript's `hasPrimaryKey`).
-  - [ ] Pair delete+insert operations sharing a primary key into `onUpdate(oldRow, newRow)` callbacks across both incremental transactions and reconnect reconciliations.
-- [ ] **Client-Side Unique & B-Tree Ranged Indexes**
-  - [ ] Implement `UniqueIndex<Row, Key>` supporting $O(1)$ `.find(_:)` lookups.
-  - [ ] Implement `BTreeIndex<Row, Key>` supporting $O(\log N)$ `.filter(range:)` prefix and range scans.
-  - [ ] Automatically maintain index structures during `TableCache` insert, delete, update, and reconnect reconciliation passes.
-- [ ] **Type-Safe Query Builder DSL**
-  - [ ] Provide a Swift `KeyPath`-based query builder (e.g., `Person.where { $0.roomId == 7 && $0.isReady == true }`).
-  - [ ] Compile typed expressions into parameterized SQL subscription strings.
+- [x] **Primary-Key Identity & Semantic `onUpdate` Pairing**
+  - [x] Add `SpacetimePrimaryKeyRow` protocol and generated primary-key extractors.
+  - [x] Key `TableCache` entries by primary key when available (matching Rust's `with_updates_by_pk` and TypeScript's `hasPrimaryKey`).
+  - [x] Pair delete+insert operations sharing a primary key into `onUpdate(oldRow, newRow)` callbacks across both incremental transactions and reconnect reconciliations.
+- [x] **Client-Side Unique & B-Tree Ranged Indexes**
+  - [x] Implement `UniqueIndex<Row, Key>` supporting $O(1)$ `.find(_:)` lookups.
+  - [x] Implement `BTreeIndex<Row, Key>` supporting $O(\log N)$ `.filter(range:)` prefix and range scans.
+  - [x] Automatically maintain index structures during `TableCache` insert, delete, update, and reconnect reconciliation passes.
+- [x] **Type-Safe Query Builder DSL**
+  - [x] Provide a Swift `KeyPath`-based query builder (e.g., `Person.where { $0.roomId == 7 && $0.isReady == true }`).
+  - [x] Compile typed expressions into parameterized SQL subscription strings.
 
 ---
 
@@ -67,9 +67,9 @@ flowchart LR
 - [ ] **Swift 6 Macros (`@SpacetimeTable`, `@SpacetimeRow`, `@SpacetimeEnum`)**
   - [ ] Synthesize zero-copy `BSATNSpecialDecodable` and `BSATNSpecialEncodable` conformances at compile time.
   - [ ] Synthesize primary-key and index accessors directly from struct annotations.
-- [ ] **SwiftUI Property Wrappers & Structured Concurrency Streams**
-  - [ ] Add `@SpacetimeQuery` property wrapper for SwiftUI views with automatic view-lifecycle `subscribe()` / `unsubscribe()` management and fine-grained observation.
-  - [ ] Expose `AsyncSequence` streams for table events (`table.inserts`, `table.deletes`, `table.updates`) and connection lifecycle (`client.connectionStates`).
+- [x] **SwiftUI Property Wrappers & Structured Concurrency Streams**
+  - [x] Add `@SpacetimeQuery` property wrapper for SwiftUI views with automatic view-lifecycle `subscribe()` / `unsubscribe()` management and fine-grained observation.
+  - [x] Expose `AsyncSequence` streams for table events (`table.inserts`, `table.deletes`, `table.updates`) and connection lifecycle (`client.connectionStates`).
 
 ---
 
@@ -77,15 +77,15 @@ flowchart LR
 
 **Goal:** Built-in mobile resilience for flaky networks, instant cold-start rendering, and latency-masked reducer calls.
 
-- [ ] **`lightMode` & `confirmedReads` Connection Options**
-  - [ ] Support `lightMode` query parameter negotiation to minimize bandwidth on cellular/watchOS connections.
-  - [ ] Support `confirmedReads` negotiation for durability-sensitive client workflows.
-- [ ] **Optimistic Reducer Predictions & Rollback**
-  - [ ] Allow registering optimistic local cache mutations alongside `send(reducer:args:)`.
-  - [ ] Automatically commit or roll back optimistic mutations when `ReducerResult` arrives (`.ok` vs `.err` / `.internalError`) or on disconnect.
-- [ ] **Disk-Backed Cache Snapshots**
-  - [ ] Add opt-in BSATN snapshot persistence to disk per module/query-set.
-  - [ ] Hydrate `ClientCache` synchronously on cold launch and seamlessly diff against live server state via `ClientCache.reconcile(queryRowsList:replacingTables:)` once connected.
+- [x] **`lightMode` & `confirmedReads` Connection Options**
+  - [x] Support `lightMode` query parameter negotiation to minimize bandwidth on cellular/watchOS connections.
+  - [x] Support `confirmedReads` negotiation for durability-sensitive client workflows.
+- [x] **Optimistic Reducer Predictions & Rollback**
+  - [x] Allow registering optimistic local cache mutations alongside `send(reducer:args:)`.
+  - [x] Automatically commit or roll back optimistic mutations when `ReducerResult` arrives (`.ok` vs `.err` / `.internalError`) or on disconnect.
+- [x] **Disk-Backed Cache Snapshots**
+  - [x] Add opt-in BSATN snapshot persistence to disk per module/query-set.
+  - [x] Hydrate `ClientCache` synchronously on cold launch and seamlessly diff against live server state via `ClientCache.reconcile(queryRowsList:replacingTables:)` once connected.
 
 ---
 
@@ -93,8 +93,8 @@ flowchart LR
 
 **Goal:** Expand beyond Apple platforms to Linux/Windows/Android, prove reliability under chaos testing, and land upstream in `clockworklabs/SpacetimeDB`.
 
-- [ ] **Cross-Platform WebSocket Transport**
-  - [ ] Provide a `URLSessionWebSocketTask` / `SwiftNIO` transport backend behind `WebSocketTransport` alongside `NWWebSocketTransport`.
+- [x] **Cross-Platform WebSocket Transport**
+  - [x] Provide a `URLSessionWebSocketTask` / `SwiftNIO` transport backend behind `WebSocketTransport` alongside `NWWebSocketTransport`.
   - [ ] Add CI targets for Linux (`ubuntu-latest`), Windows, tvOS, and Swift-on-Android.
 - [ ] **Deterministic Chaos & Soak Testing Suite**
   - [ ] Build an automated multi-client chaos harness simulating mid-stream socket drops, packet fragmentation, subscription errors, and 60 Hz reducer streams against a live SpacetimeDB server in CI.

@@ -567,6 +567,16 @@ extension Double: BSATNSpecialEncodable {
     public func encodeBSATN(to storage: inout BSATNStorage) throws { storage.appendDouble(self) }
 }
 
+extension Data: BSATNSpecialEncodable {
+    public func encodeBSATN(to storage: inout BSATNStorage) throws {
+        guard self.count <= Int(UInt32.max) else {
+            throw BSATNEncodingError.lengthOutOfRange
+        }
+        storage.appendU32(UInt32(self.count))
+        storage.append(self)
+    }
+}
+
 extension Array: BSATNSpecialEncodable where Element: Encodable {
     public func encodeBSATN(to storage: inout BSATNStorage) throws {
         guard self.count <= Int(UInt32.max) else {

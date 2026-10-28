@@ -1,10 +1,59 @@
 import Foundation
 import Synchronization
 
+/// Represents an optimistic local mutation applied to `ClientCache` before server confirmation.
+public struct OptimisticRowChange: Sendable {
+    public let tableName: String
+    public let deletedRowBytesList: [Data]
+    public let insertedRowBytesList: [Data]
+
+    public init(
+        tableName: String,
+        deletedRowBytesList: [Data] = [],
+        insertedRowBytesList: [Data] = []
+    ) {
+        self.tableName = tableName
+        self.deletedRowBytesList = deletedRowBytesList
+        self.insertedRowBytesList = insertedRowBytesList
+    }
+
+    public static func insert<T: Encodable>(tableName: String, row: T) throws -> OptimisticRowChange {
+        let encoded = try BSATNEncoder().encode(row)
+        return OptimisticRowChange(tableName: tableName, deletedRowBytesList: [], insertedRowBytesList: [encoded])
+    }
+
+    public static func delete<T: Encodable>(tableName: String, row: T) throws -> OptimisticRowChange {
+        let encoded = try BSATNEncoder().encode(row)
+        return OptimisticRowChange(tableName: tableName, deletedRowBytesList: [encoded], insertedRowBytesList: [])
+    }
+
+    public static func update<T: Encodable>(tableName: String, oldRow: T, newRow: T) throws -> OptimisticRowChange {
+        let encoder = BSATNEncoder()
+        let oldEncoded = try encoder.encode(oldRow)
+        let newEncoded = try encoder.encode(newRow)
+        return OptimisticRowChange(
+            tableName: tableName,
+            deletedRowBytesList: [oldEncoded],
+            insertedRowBytesList: [newEncoded]
+        )
+    }
+}
+
+/// Binary snapshot container used by `ClientCache.saveSnapshot(to:)` and `ClientCache.loadSnapshot(from:)`.
+private struct ClientCacheSnapshotFile: Codable {
+    struct TableEntry: Codable {
+        let tableName: String
+        let rows: [Data]
+    }
+    let version: UInt32
+    let tables: [TableEntry]
+}
+
 /// Holds the local state of all SpacetimeDB tables, routing updates from the WebSocket down to each table.
 public final class ClientCache: Sendable {
     private struct State {
         var tables: [String: any SpacetimeTableCacheProtocol] = [:]
+        var optimisticMutationsByRequestId: [RequestId: [OptimisticRowChange]] = [:]
         var pendingSyncTableNames: Set<String> = []
         var isSyncScheduled = false
     }
@@ -90,8 +139,9 @@ public final class ClientCache: Sendable {
 
     /// Clears all replicated rows while preserving generated table registrations.
     public func clear() {
-        let tablesSnapshot = state.withLock { state in
-            state.tables
+        let tablesSnapshot = state.withLock { state -> [String: any SpacetimeTableCacheProtocol] in
+            state.optimisticMutationsByRequestId.removeAll()
+            return state.tables
         }
 
         for table in tablesSnapshot.values {
@@ -99,6 +149,23 @@ public final class ClientCache: Sendable {
         }
 
         scheduleObservableSync(for: Set(tablesSnapshot.keys))
+    }
+
+    /// Evicts all rows tracked under `querySetId` across every registered table.
+    ///
+    /// Used when an unsubscribe completes without server-provided dropped rows (`sendDroppedRows == false`)
+    /// or when a subscription fails via `SubscriptionError`.
+    public func evictQuerySet(_ querySetId: QuerySetId) {
+        let tablesSnapshot = state.withLock { state in
+            state.tables
+        }
+        var modifiedTables = Set<String>()
+        for (tableName, tableCache) in tablesSnapshot {
+            if tableCache.evictQuerySet(querySetId) {
+                modifiedTables.insert(tableName)
+            }
+        }
+        scheduleObservableSync(for: modifiedTables)
     }
 
     /// Reconciles cached rows against a set of replayed `QueryRows` payloads in a single pass.
@@ -109,47 +176,58 @@ public final class ClientCache: Sendable {
     ///     incoming rows. When `nil`, all registered tables are reconciled (including tables absent
     ///     from `queryRowsList`, whose stale rows are evicted).
     public func reconcile(queryRowsList: [QueryRows], replacingTables: Set<String>? = nil) {
+        let querySets = queryRowsList.map { (querySetId: Optional<QuerySetId>.none, rows: $0) }
+        reconcile(querySets: querySets, replacingTables: replacingTables)
+    }
+
+    /// Reconciles cached rows against a set of `(querySetId, QueryRows)` payloads in a single pass.
+    public func reconcile(
+        querySets: [(querySetId: QuerySetId?, rows: QueryRows)],
+        replacingTables: Set<String>? = nil
+    ) {
         let tablesSnapshot = state.withLock { state in
             state.tables
         }
 
         let tablesToReplace = replacingTables ?? Set(tablesSnapshot.keys)
-        var incomingRowsByTable: [String: [Data]] = [:]
+        var incomingByTable: [String: [(querySetId: QuerySetId?, rowBytesList: [Data])]] = [:]
 
-        for queryRows in queryRowsList {
+        for (querySetId, queryRows) in querySets {
             for tableRows in queryRows.tables {
                 let tableName = tableRows.table.rawValue
                 let extracted = extractRows(from: tableRows.rows)
-                if !extracted.isEmpty {
-                    incomingRowsByTable[tableName, default: []].append(contentsOf: extracted)
-                } else if incomingRowsByTable[tableName] == nil {
-                    incomingRowsByTable[tableName] = []
-                }
+                incomingByTable[tableName, default: []].append((querySetId: querySetId, rowBytesList: extracted))
             }
         }
 
         var modifiedTables = Set<String>()
-        let allTargetTables = tablesToReplace.union(incomingRowsByTable.keys)
+        let allTargetTables = tablesToReplace.union(incomingByTable.keys)
 
         for tableName in allTargetTables {
             guard let tableCache = tablesSnapshot[tableName] else {
                 continue
             }
-            let newRows = incomingRowsByTable[tableName] ?? []
+            let tableQuerySets = incomingByTable[tableName] ?? []
             if tablesToReplace.contains(tableName) {
                 do {
-                    if try tableCache.reconcile(rowBytesList: newRows) {
+                    if try tableCache.reconcile(querySets: tableQuerySets) {
                         modifiedTables.insert(tableName)
                     }
                 } catch {
                     Log.cache.error("Failed to reconcile rows for table '\(tableName)': \(error.localizedDescription)")
                 }
-            } else if !newRows.isEmpty {
-                do {
-                    try tableCache.handleBulkInsert(rowBytesList: newRows)
-                    modifiedTables.insert(tableName)
-                } catch {
-                    Log.cache.error("Failed to bulk insert rows for table '\(tableName)': \(error.localizedDescription)")
+            } else {
+                for (querySetId, rowBytesList) in tableQuerySets where !rowBytesList.isEmpty {
+                    do {
+                        try tableCache.applyQuerySetTransition(
+                            querySetId: querySetId,
+                            deleteRowBytesList: [],
+                            insertRowBytesList: rowBytesList
+                        )
+                        modifiedTables.insert(tableName)
+                    } catch {
+                        Log.cache.error("Failed to bulk insert rows for table '\(tableName)': \(error.localizedDescription)")
+                    }
                 }
             }
         }
@@ -166,12 +244,13 @@ public final class ClientCache: Sendable {
         }
 
         for querySet in update.querySets {
+            let querySetId = querySet.querySetId
             for tableUpdate in querySet.tables {
                 let tableName = tableUpdate.tableName.rawValue
                 guard let tableCache = tablesSnapshot[tableName] else {
                     continue
                 }
-                
+
                 modifiedTables.insert(tableName)
 
                 for rowUpdate in tableUpdate.rows {
@@ -179,33 +258,14 @@ public final class ClientCache: Sendable {
                     case .persistentTable(let persistent):
                         let deleteRows = self.extractRows(from: persistent.deletes)
                         let insertRows = self.extractRows(from: persistent.inserts)
-                        let pairedCount = min(deleteRows.count, insertRows.count)
-
-                        
-                        if pairedCount > 0 {
-                            do {
-                                try tableCache.handleBulkUpdate(
-                                    oldRowBytesList: Array(deleteRows[..<pairedCount]),
-                                    newRowBytesList: Array(insertRows[..<pairedCount])
-                                )
-                            } catch {
-                                Log.cache.error("Failed to bulk update rows for table '\(tableName)': \(error.localizedDescription)")
-                            }
-                        }
-
-                        if deleteRows.count > pairedCount {
-                            do {
-                                try tableCache.handleBulkDelete(rowBytesList: Array(deleteRows[pairedCount...]))
-                            } catch {
-                                Log.cache.error("Failed to bulk delete rows for table '\(tableName)': \(error.localizedDescription)")
-                            }
-                        }
-                        if insertRows.count > pairedCount {
-                            do {
-                                try tableCache.handleBulkInsert(rowBytesList: Array(insertRows[pairedCount...]))
-                            } catch {
-                                Log.cache.error("Failed to bulk insert rows for table '\(tableName)': \(error.localizedDescription)")
-                            }
+                        do {
+                            try tableCache.applyQuerySetTransition(
+                                querySetId: querySetId,
+                                deleteRowBytesList: deleteRows,
+                                insertRowBytesList: insertRows
+                            )
+                        } catch {
+                            Log.cache.error("Failed to apply querySet transition for table '\(tableName)': \(error.localizedDescription)")
                         }
                     case .eventTable:
                         break
@@ -213,7 +273,116 @@ public final class ClientCache: Sendable {
                 }
             }
         }
-        
+
+        scheduleObservableSync(for: modifiedTables)
+    }
+
+    // MARK: - Optimistic Mutations
+
+    /// Applies optimistic row changes immediately and records them under `requestId` so they can be
+    /// reconciled when the reducer's `ReducerResult` arrives (or rolled back if it fails or disconnects).
+    public func applyOptimisticChanges(requestId: RequestId, changes: [OptimisticRowChange]) {
+        guard !changes.isEmpty else { return }
+
+        let tablesSnapshot = state.withLock { state -> [String: any SpacetimeTableCacheProtocol] in
+            state.optimisticMutationsByRequestId[requestId] = changes
+            return state.tables
+        }
+
+        var modifiedTables = Set<String>()
+        for change in changes {
+            guard let tableCache = tablesSnapshot[change.tableName] else { continue }
+            do {
+                try tableCache.applyQuerySetTransition(
+                    querySetId: nil,
+                    deleteRowBytesList: change.deletedRowBytesList,
+                    insertRowBytesList: change.insertedRowBytesList
+                )
+                modifiedTables.insert(change.tableName)
+            } catch {
+                Log.cache.error("Failed to apply optimistic change for table '\(change.tableName)': \(error.localizedDescription)")
+            }
+        }
+        scheduleObservableSync(for: modifiedTables)
+    }
+
+    /// Reverts the optimistic changes recorded for `requestId`.
+    ///
+    /// Called before applying an authoritative `ReducerResult.ok` transaction update or when a reducer
+    /// returns `.err` / `.internalError` or disconnects.
+    public func revertOptimisticChanges(for requestId: RequestId) {
+        let (changes, tablesSnapshot) = state.withLock { state -> ([OptimisticRowChange]?, [String: any SpacetimeTableCacheProtocol]) in
+            let removed = state.optimisticMutationsByRequestId.removeValue(forKey: requestId)
+            return (removed, state.tables)
+        }
+        guard let changes, !changes.isEmpty else { return }
+
+        var modifiedTables = Set<String>()
+        for change in changes.reversed() {
+            guard let tableCache = tablesSnapshot[change.tableName] else { continue }
+            do {
+                try tableCache.applyQuerySetTransition(
+                    querySetId: nil,
+                    deleteRowBytesList: change.insertedRowBytesList,
+                    insertRowBytesList: change.deletedRowBytesList
+                )
+                modifiedTables.insert(change.tableName)
+            } catch {
+                Log.cache.error("Failed to revert optimistic change for table '\(change.tableName)': \(error.localizedDescription)")
+            }
+        }
+        scheduleObservableSync(for: modifiedTables)
+    }
+
+    /// Reverts all in-flight optimistic mutations (for example, on socket disconnect).
+    public func revertAllOptimisticChanges() {
+        let requestIds = state.withLock { state in
+            Array(state.optimisticMutationsByRequestId.keys)
+        }
+        for requestId in requestIds {
+            revertOptimisticChanges(for: requestId)
+        }
+    }
+
+    // MARK: - Offline Snapshot Persistence
+
+    /// Saves a BSATN-encoded snapshot of all registered tables' current rows to `url`.
+    public func saveSnapshot(to url: URL) throws {
+        let data = try encodeSnapshotData()
+        try data.write(to: url, options: .atomic)
+    }
+
+    /// Loads a BSATN-encoded snapshot from `url` and restores rows into all matching registered tables.
+    public func loadSnapshot(from url: URL) throws {
+        let data = try Data(contentsOf: url)
+        try decodeSnapshotData(data)
+    }
+
+    /// Encodes all registered tables' current rows into a BSATN binary blob.
+    public func encodeSnapshotData() throws -> Data {
+        let tablesSnapshot = state.withLock { state in
+            state.tables
+        }
+        let entries = tablesSnapshot.keys.sorted().compactMap { name -> ClientCacheSnapshotFile.TableEntry? in
+            guard let table = tablesSnapshot[name] else { return nil }
+            return ClientCacheSnapshotFile.TableEntry(tableName: name, rows: table.snapshotRowBytesList())
+        }
+        let snapshot = ClientCacheSnapshotFile(version: 1, tables: entries)
+        return try BSATNEncoder().encode(snapshot)
+    }
+
+    /// Restores rows into registered tables from a BSATN binary blob produced by `encodeSnapshotData()`.
+    public func decodeSnapshotData(_ data: Data) throws {
+        let snapshot = try BSATNDecoder().decode(ClientCacheSnapshotFile.self, from: data)
+        let tablesSnapshot = state.withLock { state in
+            state.tables
+        }
+        var modifiedTables = Set<String>()
+        for entry in snapshot.tables {
+            guard let table = tablesSnapshot[entry.tableName] else { continue }
+            try table.restoreSnapshot(rowBytesList: entry.rows)
+            modifiedTables.insert(entry.tableName)
+        }
         scheduleObservableSync(for: modifiedTables)
     }
 
@@ -284,33 +453,6 @@ public final class ClientCache: Sendable {
         }
 
         return rows
-    }
-
-    private func processRows<S: Sequence>(_ rows: S, tableCache: any SpacetimeTableCacheProtocol, isInsert: Bool)
-    where S.Element == Data {
-        for rowData in rows {
-            self.applyRow(data: rowData, tableCache: tableCache, isInsert: isInsert)
-        }
-    }
-
-    private func applyRow(data: Data, tableCache: any SpacetimeTableCacheProtocol, isInsert: Bool) {
-        do {
-            if isInsert {
-                try tableCache.handleInsert(rowBytes: data)
-            } else {
-                try tableCache.handleDelete(rowBytes: data)
-            }
-        } catch {
-            Log.cache.error("Failed to decode row for table '\(tableCache.tableName)': \(error.localizedDescription)")
-        }
-    }
-
-    private func applyRowUpdate(oldData: Data, newData: Data, tableCache: any SpacetimeTableCacheProtocol) {
-        do {
-            try tableCache.handleUpdate(oldRowBytes: oldData, newRowBytes: newData)
-        } catch {
-            Log.cache.error("Failed to decode updated row for table '\(tableCache.tableName)': \(error.localizedDescription)")
-        }
     }
 }
 

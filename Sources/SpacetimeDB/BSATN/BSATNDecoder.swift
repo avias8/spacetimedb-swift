@@ -606,6 +606,13 @@ extension Double: BSATNSpecialDecodable {
     public static func decodeBSATN(from reader: inout BSATNReader) throws -> Double { try reader.readDouble() }
 }
 
+extension Data: BSATNSpecialDecodable {
+    public static func decodeBSATN(from reader: inout BSATNReader) throws -> Data {
+        let count = Int(try reader.readU32())
+        return try reader.readBytes(count: count)
+    }
+}
+
 extension Array: BSATNSpecialDecodable where Element: Decodable {
     public static func decodeBSATN(from reader: inout BSATNReader) throws -> Array {
         let count = Int(try reader.readU32())

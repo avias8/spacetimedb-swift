@@ -3,19 +3,24 @@ import Foundation
 import Network
 import Synchronization
 
-protocol WebSocketTransportDelegate: AnyObject, Sendable {
+public protocol WebSocketTransportDelegate: AnyObject, Sendable {
     func webSocketTransportDidConnect()
     func webSocketTransportDidDisconnect(error: Error?)
     func webSocketTransportDidReceive(data: Data)
     func webSocketTransportDidReceivePong()
 }
 
-protocol WebSocketTransport: AnyObject, Sendable {
+public protocol WebSocketTransport: AnyObject, Sendable {
     var delegate: WebSocketTransportDelegate? { get set }
+    var negotiatedProtocol: String? { get }
     func connect(to url: URL, protocols: [String], headers: [String: String])
     func disconnect()
     func send(data: Data, completion: @escaping @Sendable (Error?) -> Void)
     func sendPing(completion: @escaping @Sendable (Error?) -> Void)
+}
+
+public extension WebSocketTransport {
+    var negotiatedProtocol: String? { nil }
 }
 
 enum WebSocketTransportError: Error, Equatable, LocalizedError {
@@ -97,6 +102,7 @@ final class NWWebSocketTransport: WebSocketTransport {
         var didStartHandshake = false
         var didCompleteHandshake = false
         var handshakeKey = ""
+        var negotiatedProtocol: String?
         var incomingBuffer = Data()
         var fragmentOpcode: UInt8?
         var fragmentBuffer = Data()
@@ -105,6 +111,7 @@ final class NWWebSocketTransport: WebSocketTransport {
             didStartHandshake = false
             didCompleteHandshake = false
             handshakeKey = ""
+            negotiatedProtocol = nil
             incomingBuffer = Data()
             fragmentOpcode = nil
             fragmentBuffer = Data()
@@ -136,6 +143,10 @@ final class NWWebSocketTransport: WebSocketTransport {
     var delegate: WebSocketTransportDelegate? {
         get { state.withLock { $0.delegate } }
         set { state.withLock { $0.delegate = newValue } }
+    }
+
+    var negotiatedProtocol: String? {
+        state.withLock { $0.negotiatedProtocol }
     }
 
     func connect(to url: URL, protocols: [String], headers: [String: String]) {
@@ -382,8 +393,9 @@ final class NWWebSocketTransport: WebSocketTransport {
                     self.receiveHandshakeResponse(connection: connection, key: key, protocols: protocols)
                 }
             case .complete(let header):
+                let selectedProtocol: String?
                 do {
-                    try Self.validateHandshakeResponse(header, key: key, protocols: protocols)
+                    selectedProtocol = try Self.validateHandshakeResponse(header, key: key, protocols: protocols)
                 } catch {
                     self.terminate(connection: connection, error: error)
                     return
@@ -394,6 +406,7 @@ final class NWWebSocketTransport: WebSocketTransport {
                         return (false, nil)
                     }
                     state.didCompleteHandshake = true
+                    state.negotiatedProtocol = selectedProtocol
                     return (true, state.delegate)
                 }
                 guard activation.0 else { return }
@@ -409,7 +422,8 @@ final class NWWebSocketTransport: WebSocketTransport {
         }
     }
 
-    static func validateHandshakeResponse(_ headerData: Data, key: String, protocols: [String]) throws {
+    @discardableResult
+    static func validateHandshakeResponse(_ headerData: Data, key: String, protocols: [String]) throws -> String? {
         guard let headerString = String(data: headerData, encoding: .utf8) else {
             throw WebSocketTransportError.invalidHandshake("headers are not valid UTF-8")
         }
@@ -460,10 +474,12 @@ final class NWWebSocketTransport: WebSocketTransport {
             guard selectedProtocols.isEmpty else {
                 throw WebSocketTransportError.invalidHandshake("server selected an unoffered subprotocol")
             }
+            return nil
         } else {
             guard selectedProtocols.count == 1, protocols.contains(selectedProtocols[0]) else {
                 throw WebSocketTransportError.invalidHandshake("server did not select an offered subprotocol")
             }
+            return selectedProtocols[0]
         }
     }
 
