@@ -7,6 +7,7 @@ let package = Package(
     platforms: [
         .macOS(.v15),
         .iOS(.v18),
+        .tvOS(.v18),
         .visionOS(.v2),
         .watchOS(.v11)
     ],
@@ -15,10 +16,18 @@ let package = Package(
             name: "SpacetimeDB",
             targets: ["SpacetimeDB"]
         ),
+        .plugin(
+            name: "SpacetimeDBCodegenPlugin",
+            targets: ["SpacetimeDBCodegenPlugin"]
+        ),
     ],
     targets: [
         .target(
             name: "SpacetimeDB"
+        ),
+        .plugin(
+            name: "SpacetimeDBCodegenPlugin",
+            capability: .buildTool()
         ),
         .testTarget(
             name: "SpacetimeDBTests",

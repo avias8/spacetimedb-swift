@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-validation:
+    name: macOS Tests, TSan, Release & DocC
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Unit & Chaos Tests
+        run: swift test
+
+      - name: Run Tests with Thread Sanitizer
+        run: swift test --sanitize=thread
+
+      - name: Build Release Configuration
+        run: swift build -c release
+
+      - name: Build DocC Documentation
+        run: |
+          xcodebuild docbuild \
+            -scheme SpacetimeDB \
+            -destination 'generic/platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Verify Benchmark Package Manifest
+        working-directory: Benchmarks
+        run: swift package dump-package > /dev/null
+
+      - name: Verify Clean Tracked Worktree
+        run: git diff --exit-code
+
+  apple-simulators:
+    name: ${{ matrix.platform }} Simulator Build
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: iOS 18
+            destination: "generic/platform=iOS Simulator"
+          - platform: tvOS 18
+            destination: "generic/platform=tvOS Simulator"
+          - platform: visionOS 2
+            destination: "generic/platform=visionOS Simulator"
+          - platform: watchOS 11
+            destination: "generic/platform=watchOS Simulator"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build for ${{ matrix.platform }}
+        run: |
+          xcodebuild build \
+            -scheme SpacetimeDB \
+            -destination '${{ matrix.destination }}' \
+            CODE_SIGNING_ALLOWED=NO

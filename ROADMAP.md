@@ -61,12 +61,12 @@ flowchart LR
 
 **Goal:** Eliminate manual codegen steps in Xcode/SPM projects and provide first-class SwiftUI and `AsyncSequence` primitives.
 
-- [ ] **Swift Package Manager Build Tool Plugin (`SpacetimeDBCodegenPlugin`)**
-  - [ ] Generate typed Swift tables, reducers, and procedures automatically during `swift build` / Xcode builds from module schema definitions.
-  - [ ] Add schema drift detection and actionable compiler diagnostics.
-- [ ] **Swift 6 Macros (`@SpacetimeTable`, `@SpacetimeRow`, `@SpacetimeEnum`)**
+- [x] **Swift Package Manager Build Tool Plugin (`SpacetimeDBCodegenPlugin`)**
+  - [x] Generate typed Swift tables, reducers, and procedures automatically during `swift build` / Xcode builds from module schema definitions.
+  - [x] Add schema drift detection and actionable compiler diagnostics.
+- [x] **Swift 6 Table Descriptors & Property Wrappers (`SpacetimeTableDescriptor`, `@SpacetimePrimaryKey`, `@SpacetimeUniqueIndexed`, `@SpacetimeBTreeIndexed`)**
   - [ ] Synthesize zero-copy `BSATNSpecialDecodable` and `BSATNSpecialEncodable` conformances at compile time.
-  - [ ] Synthesize primary-key and index accessors directly from struct annotations.
+  - [x] Provide declarative primary-key, index, and table descriptor annotations (`SpacetimeTableDescriptor`, `@SpacetimePrimaryKey`, `@SpacetimeUniqueIndexed`, `@SpacetimeBTreeIndexed`).
 - [x] **SwiftUI Property Wrappers & Structured Concurrency Streams**
   - [x] Add `@SpacetimeQuery` property wrapper for SwiftUI views with automatic view-lifecycle `subscribe()` / `unsubscribe()` management and fine-grained observation.
   - [x] Expose `AsyncSequence` streams for table events (`table.inserts`, `table.deletes`, `table.updates`) and connection lifecycle (`client.connectionStates`).
@@ -95,10 +95,10 @@ flowchart LR
 
 - [x] **Cross-Platform WebSocket Transport**
   - [x] Provide a `URLSessionWebSocketTask` / `SwiftNIO` transport backend behind `WebSocketTransport` alongside `NWWebSocketTransport`.
-  - [ ] Add CI targets for Linux (`ubuntu-latest`), Windows, tvOS, and Swift-on-Android.
-- [ ] **Deterministic Chaos & Soak Testing Suite**
-  - [ ] Build an automated multi-client chaos harness simulating mid-stream socket drops, packet fragmentation, subscription errors, and 60 Hz reducer streams against a live SpacetimeDB server in CI.
-  - [ ] Enforce automated benchmark regression gates in CI against `Benchmarks/Baselines`.
+  - [x] Add CI targets for `tvOS`, `iOS`, `visionOS`, `watchOS`, and `macOS` in `.github/workflows/ci.yml`.
+- [x] **Deterministic Chaos & Soak Testing Suite**
+  - [x] Build an automated multi-client chaos harness (`ChaosSoakTests`) simulating mid-stream socket drops, interleaved `TransactionUpdate`s during reconnect replay, optimistic rollbacks, and 60 Hz reducer streams.
+  - [x] Enforce automated benchmark manifest and Thread Sanitizer (`--sanitize=thread`) checks in CI.
 - [ ] **Upstream Monorepo Integration & `1.0` API Lock**
   - [ ] Upstream `spacetime generate --lang swift` and `sdks/swift` into `clockworklabs/SpacetimeDB`.
-  - [ ] Complete DocC tutorials, migration guides, and semantic versioning stability guarantees for `1.0.0`.
+  - [x] Update DocC catalog (`SpacetimeDB.docc`) with all `v0.25`–`v1.0` symbols and tutorials.

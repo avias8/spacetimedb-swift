@@ -1,26 +1,40 @@
 # ``SpacetimeDB``
 
-Native Swift SDK for SpacetimeDB realtime clients on Apple platforms.
+Native Swift SDK for SpacetimeDB realtime clients across Apple platforms (`macOS`, `iOS`, `tvOS`, `visionOS`, `watchOS`).
 
 ## Overview
 
 `SpacetimeDB` provides:
 
 - BSATN protocol encoding/decoding
-- WebSocket transport and reconnect support
-- Typed table cache integration
-- Reducer/procedure/query client APIs
-- Apple platform support for macOS and iOS
+- `v3.bsatn.spacetimedb` and `v2.bsatn.spacetimedb` WebSocket transports (`NWWebSocketTransport` and `URLSessionWebSocketTransport`) with reconnect reconciliation and outbound frame batching
+- Typed table cache integration (`ClientCache`, `TableCache`) with primary-key identity (`SpacetimePrimaryKeyRow`) and client-side indexes (`UniqueIndex`, `BTreeIndex`)
+- Type-safe `KeyPath` SQL query builder (`TableQuery`, `SQLColumn`, `SQLPredicate`) and SwiftUI `@SpacetimeQuery`
+- Optimistic reducer mutations (`OptimisticRowChange`) and offline BSATN disk snapshots
+- Reducer/procedure/query client APIs and `AsyncSequence` streams
+- Apple platform support for macOS, iOS, tvOS, visionOS, and watchOS
 
 ## Key Types
 
 - ``SpacetimeClient``
 - ``SpacetimeClientDelegate``
+- ``SpacetimeWireProtocol``
+- ``WebSocketV3Frames``
+- ``URLSessionWebSocketTransport``
 - ``ReconnectPolicy``
 - ``CompressionMode``
 - ``SubscriptionHandle``
 - ``ClientCache``
 - ``TableCache``
+- ``SpacetimePrimaryKeyRow``
+- ``UniqueIndex``
+- ``BTreeIndex``
+- ``TableQuery``
+- ``SQLColumn``
+- ``SQLPredicate``
+- ``OptimisticRowChange``
+- ``SpacetimeTableDescriptor``
+- ``SpacetimeSchemaValidator``
 - ``KeychainTokenStore``
 
 ## Tutorials
