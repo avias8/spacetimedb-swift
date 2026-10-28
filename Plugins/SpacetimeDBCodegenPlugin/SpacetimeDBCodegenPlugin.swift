@@ -28,34 +28,33 @@ struct SpacetimeDBCodegenPlugin: BuildToolPlugin {
             return []
         }
 
-        let configURL = sourceTarget.directoryURL.appending(path: "spacetime-codegen.json")
-        guard FileManager.default.fileExists(atPath: configURL.path()) else {
+        let configPath = sourceTarget.directory.appending(subpath: "spacetime-codegen.json")
+        guard FileManager.default.fileExists(atPath: configPath.string) else {
             return []
         }
 
-        let configData = try Data(contentsOf: configURL)
+        let configData = try Data(contentsOf: URL(fileURLWithPath: configPath.string))
         let config = try JSONDecoder().decode(Configuration.self, from: configData)
 
-        let outputDir = context.pluginWorkDirectoryURL.appending(path: "SpacetimeGenerated")
-        try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        let outputDir = context.pluginWorkDirectory.appending(subpath: "SpacetimeGenerated")
+        try FileManager.default.createDirectory(atPath: outputDir.string, withIntermediateDirectories: true)
 
-        let executableURL = try resolveExecutable(named: config.spacetimeExecutable ?? "spacetime", in: context)
+        let executablePath = try resolveExecutable(named: config.spacetimeExecutable ?? "spacetime", in: context)
 
         var arguments: [String] = [
             "generate",
             "--lang", "swift",
-            "--out-dir", outputDir.path(),
+            "--out-dir", outputDir.string,
         ]
 
-        var inputFiles: [URL] = [configURL]
-
         if let modulePath = config.modulePath {
-            let resolvedURL = URL(filePath: modulePath, relativeTo: sourceTarget.directoryURL).standardizedFileURL
-            arguments.append(contentsOf: ["--project-path", resolvedURL.path()])
+            let targetURL = URL(fileURLWithPath: sourceTarget.directory.string)
+            let resolvedURL = URL(fileURLWithPath: modulePath, relativeTo: targetURL).standardized
+            arguments.append(contentsOf: ["--project-path", resolvedURL.path])
         } else if let binPath = config.binPath {
-            let resolvedURL = URL(filePath: binPath, relativeTo: sourceTarget.directoryURL).standardizedFileURL
-            arguments.append(contentsOf: ["--bin-path", resolvedURL.path()])
-            inputFiles.append(resolvedURL)
+            let targetURL = URL(fileURLWithPath: sourceTarget.directory.string)
+            let resolvedURL = URL(fileURLWithPath: binPath, relativeTo: targetURL).standardized
+            arguments.append(contentsOf: ["--bin-path", resolvedURL.path])
         } else {
             Diagnostics.error("spacetime-codegen.json must specify either 'modulePath' or 'binPath'.")
             return []
@@ -68,29 +67,29 @@ struct SpacetimeDBCodegenPlugin: BuildToolPlugin {
         return [
             .prebuildCommand(
                 displayName: "Generate SpacetimeDB Swift Bindings for \(target.name)",
-                executable: executableURL,
+                executable: executablePath,
                 arguments: arguments,
                 outputFilesDirectory: outputDir
             )
         ]
     }
 
-    private func resolveExecutable(named name: String, in context: PluginContext) throws -> URL {
+    private func resolveExecutable(named name: String, in context: PluginContext) throws -> Path {
         if name.contains("/") {
-            return URL(filePath: name)
+            return Path(name)
         }
         if let tool = try? context.tool(named: name) {
-            return tool.url
+            return tool.path
         }
         let searchPaths = [
-            FileManager.default.homeDirectoryForCurrentUser.appending(path: ".local/bin/\(name)").path(),
+            FileManager.default.homeDirectoryForCurrentUser.path + "/.local/bin/\(name)",
             "/opt/homebrew/bin/\(name)",
             "/usr/local/bin/\(name)",
             "/usr/bin/\(name)",
         ]
         for path in searchPaths where FileManager.default.isExecutableFile(atPath: path) {
-            return URL(filePath: path)
+            return Path(path)
         }
-        return URL(filePath: "/usr/bin/env")
+        return Path("/usr/bin/env")
     }
 }

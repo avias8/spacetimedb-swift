@@ -30,7 +30,7 @@ Native Swift SDK for connecting to SpacetimeDB over `v3.bsatn.spacetimedb` and `
 
 ## Requirements
 
-- Swift tools `6.2`
+- Swift tools `6.0+`
 - Apple platforms:
   - macOS `15+`
   - iOS `18+`
