@@ -78,6 +78,16 @@ public final class ClientCache: Sendable {
         return table
     }
 
+    /// Clears just these tables' rows, keeping their registrations (a fresh subscription's
+    /// rows replace them).
+    public func clear(tables names: Set<String>) {
+        let tables = state.withLock { state in names.compactMap { state.tables[$0] } }
+        for table in tables {
+            table.clear()
+        }
+        scheduleObservableSync(for: names)
+    }
+
     /// Clears all replicated rows while preserving generated table registrations.
     public func clear() {
         let tablesSnapshot = state.withLock { state in
@@ -89,6 +99,62 @@ public final class ClientCache: Sendable {
         }
 
         scheduleObservableSync(for: Set(tablesSnapshot.keys))
+    }
+
+    /// Reconciles cached rows against a set of replayed `QueryRows` payloads in a single pass.
+    ///
+    /// - Parameters:
+    ///   - queryRowsList: Initial row snapshots from one or more applied subscriptions.
+    ///   - replacingTables: Tables whose existing cached rows should be replaced (diffed) by the
+    ///     incoming rows. When `nil`, all registered tables are reconciled (including tables absent
+    ///     from `queryRowsList`, whose stale rows are evicted).
+    public func reconcile(queryRowsList: [QueryRows], replacingTables: Set<String>? = nil) {
+        let tablesSnapshot = state.withLock { state in
+            state.tables
+        }
+
+        let tablesToReplace = replacingTables ?? Set(tablesSnapshot.keys)
+        var incomingRowsByTable: [String: [Data]] = [:]
+
+        for queryRows in queryRowsList {
+            for tableRows in queryRows.tables {
+                let tableName = tableRows.table.rawValue
+                let extracted = extractRows(from: tableRows.rows)
+                if !extracted.isEmpty {
+                    incomingRowsByTable[tableName, default: []].append(contentsOf: extracted)
+                } else if incomingRowsByTable[tableName] == nil {
+                    incomingRowsByTable[tableName] = []
+                }
+            }
+        }
+
+        var modifiedTables = Set<String>()
+        let allTargetTables = tablesToReplace.union(incomingRowsByTable.keys)
+
+        for tableName in allTargetTables {
+            guard let tableCache = tablesSnapshot[tableName] else {
+                continue
+            }
+            let newRows = incomingRowsByTable[tableName] ?? []
+            if tablesToReplace.contains(tableName) {
+                do {
+                    if try tableCache.reconcile(rowBytesList: newRows) {
+                        modifiedTables.insert(tableName)
+                    }
+                } catch {
+                    Log.cache.error("Failed to reconcile rows for table '\(tableName)': \(error.localizedDescription)")
+                }
+            } else if !newRows.isEmpty {
+                do {
+                    try tableCache.handleBulkInsert(rowBytesList: newRows)
+                    modifiedTables.insert(tableName)
+                } catch {
+                    Log.cache.error("Failed to bulk insert rows for table '\(tableName)': \(error.localizedDescription)")
+                }
+            }
+        }
+
+        scheduleObservableSync(for: modifiedTables)
     }
 
     /// Processes a TransactionUpdate payload from the network.

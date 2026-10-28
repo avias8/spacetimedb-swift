@@ -108,7 +108,7 @@ final class CacheTests: XCTestCase {
     }
 
     @MainActor
-    func testDeferredIndexPreservesDuplicateRowsAcrossDelete() throws {
+    func testOverlappingInsertsAreRefcountedNotRepeated() throws {
         let cache = TableCache<Person>(tableName: "Person")
         let encoder = BSATNEncoder()
         let alice = Person(id: 1, name: "Alice")
@@ -116,9 +116,12 @@ final class CacheTests: XCTestCase {
         let aliceBytes = try encoder.encode(alice)
         let bobBytes = try encoder.encode(bob)
 
+        // Two overlapping subscriptions both deliver Alice: she is listed once, held twice.
         try cache.handleBulkInsert(rowBytesList: [aliceBytes, aliceBytes, bobBytes])
         cache.sync()
-        XCTAssertEqual(cache.rows, [alice, alice, bob])
+        XCTAssertEqual(cache.rows.count, 2)
+        XCTAssertEqual(cache.rows.filter { $0 == alice }.count, 1)
+        XCTAssertEqual(cache.rows.filter { $0 == bob }.count, 1)
 
         try cache.handleDelete(rowBytes: aliceBytes)
         cache.sync()
@@ -129,6 +132,94 @@ final class CacheTests: XCTestCase {
         try cache.handleDelete(rowBytes: aliceBytes)
         cache.sync()
         XCTAssertEqual(cache.rows, [bob])
+    }
+
+    @MainActor
+    func testClearTablesClearsOnlyThoseTables() throws {
+        let clientCache = ClientCache()
+        let people = TableCache<Person>(tableName: "Person")
+        let others = TableCache<Person>(tableName: "Other")
+        clientCache.registerTable(name: "Person", cache: people)
+        clientCache.registerTable(name: "Other", cache: others)
+        let encoder = BSATNEncoder()
+        try people.handleInsert(rowBytes: encoder.encode(Person(id: 1, name: "Stale")))
+        try others.handleInsert(rowBytes: encoder.encode(Person(id: 2, name: "Kept")))
+
+        clientCache.clear(tables: ["Person", "Missing"])
+        people.sync()
+        others.sync()
+
+        XCTAssertEqual(people.rows, [])
+        XCTAssertEqual(others.rows, [Person(id: 2, name: "Kept")])
+        XCTAssertTrue(clientCache.registeredTableNames.contains("Person"))
+    }
+
+    @MainActor
+    func testReconcileDiffsCachedRowsAndSkipsIdenticalCallbacks() throws {
+        let clientCache = ClientCache()
+        let people = TableCache<Person>(tableName: "Person")
+        let uncovered = TableCache<Person>(tableName: "Uncovered")
+        clientCache.registerTable(name: "Person", cache: people)
+        clientCache.registerTable(name: "Uncovered", cache: uncovered)
+
+        let encoder = BSATNEncoder()
+        let ada = Person(id: 1, name: "Ada")
+        let oldRoom = Person(id: 2, name: "Lobby")
+        let newRoom = Person(id: 2, name: "Dealing")
+        let bo = Person(id: 3, name: "Bo")
+        let staleUncovered = Person(id: 99, name: "Ghost")
+
+        let adaBytes = try encoder.encode(ada)
+        let oldRoomBytes = try encoder.encode(oldRoom)
+        let newRoomBytes = try encoder.encode(newRoom)
+        let boBytes = try encoder.encode(bo)
+        let staleUncoveredBytes = try encoder.encode(staleUncovered)
+
+        try people.handleBulkInsert(rowBytesList: [adaBytes, oldRoomBytes])
+        try uncovered.handleInsert(rowBytes: staleUncoveredBytes)
+        people.sync()
+        uncovered.sync()
+
+        let inserts = LockIsolated<[Person]>([])
+        let deletes = LockIsolated<[Person]>([])
+        let insertHandle = people.onInsert { person in inserts.withValue { $0.append(person) } }
+        let deleteHandle = people.onDelete { person in deletes.withValue { $0.append(person) } }
+        defer {
+            insertHandle.cancel()
+            deleteHandle.cancel()
+        }
+
+        // Reconnect replays two overlapping subscriptions on Person (Ada in both, NewRoom in sub1, Bo in sub2)
+        // and no subscriptions covering Uncovered.
+        let sub1 = QueryRows(tables: [
+            SingleTableRows(table: RawIdentifier(rawValue: "Person"), rows: makeRowList(rows: [adaBytes, newRoomBytes]))
+        ])
+        let sub2 = QueryRows(tables: [
+            SingleTableRows(table: RawIdentifier(rawValue: "Person"), rows: makeRowList(rows: [adaBytes, boBytes]))
+        ])
+
+        clientCache.reconcile(queryRowsList: [sub1, sub2])
+        people.sync()
+        uncovered.sync()
+
+        XCTAssertEqual(Set(people.rows.map(\.name)), Set(["Ada", "Dealing", "Bo"]))
+        XCTAssertEqual(people.rows.count, 3)
+        // Unchanged row (Ada) must not fire delete or insert; OldRoom fires delete; NewRoom and Bo fire insert.
+        XCTAssertEqual(deletes.value, [oldRoom])
+        XCTAssertEqual(Set(inserts.value.map(\.name)), Set(["Dealing", "Bo"]))
+        // Table not covered by any replayed subscription is also cleared of ghost rows.
+        XCTAssertEqual(uncovered.rows, [])
+
+        // Ada has refcount == 2 from the two overlapping replayed subscriptions, so she survives one delete.
+        try people.handleDelete(rowBytes: adaBytes)
+        people.sync()
+        XCTAssertTrue(people.rows.contains(ada))
+        XCTAssertEqual(deletes.value, [oldRoom])
+
+        try people.handleDelete(rowBytes: adaBytes)
+        people.sync()
+        XCTAssertFalse(people.rows.contains(ada))
+        XCTAssertEqual(deletes.value, [oldRoom, ada])
     }
 
     @MainActor

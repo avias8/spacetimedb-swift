@@ -10,6 +10,8 @@ public protocol SpacetimeTableCacheProtocol: AnyObject, Sendable {
     func handleBulkInsert(rowBytesList: [Data]) throws
     func handleBulkDelete(rowBytesList: [Data]) throws
     func handleBulkUpdate(oldRowBytesList: [Data], newRowBytesList: [Data]) throws
+    @discardableResult
+    func reconcile(rowBytesList: [Data]) throws -> Bool
     func clear()
 }
 
@@ -132,14 +134,14 @@ public final class TableCache<T: Decodable & Sendable>: SpacetimeTableCacheProto
         _ row: T,
         for key: HashedBytes,
         into entries: inout [HashedBytes: RowEntry<T>]
-    ) -> T {
+    ) -> (value: T, isNew: Bool) {
         guard var existing = entries.updateValue(RowEntry(count: 1, value: row), forKey: key) else {
-            return row
+            return (row, true)
         }
 
         existing.count += 1
         entries[key] = existing
-        return existing.value
+        return (existing.value, false)
     }
 
     @inline(__always)
@@ -164,14 +166,18 @@ public final class TableCache<T: Decodable & Sendable>: SpacetimeTableCacheProto
         }
 
         let delivery = state.withLock { state -> (row: T, callbacks: [@Sendable (T) -> Void])? in
-            let storedRow: T
-            if state.entriesAreMaterialized {
-                storedRow = Self.insert(decodedRow, for: HashedBytes(rowBytes), into: &state.entries)
-            } else {
-                state.pendingRows.append(PendingRow(bytes: rowBytes, value: decodedRow))
-                storedRow = decodedRow
+            if state.insertCallbacks.isEmpty {
+                if state.entriesAreMaterialized {
+                    _ = Self.insert(decodedRow, for: HashedBytes(rowBytes), into: &state.entries)
+                } else {
+                    state.pendingRows.append(PendingRow(bytes: rowBytes, value: decodedRow))
+                }
+                return nil
             }
-            guard !state.insertCallbacks.isEmpty else { return nil }
+
+            Self.materializeEntries(in: &state)
+            let (storedRow, isNew) = Self.insert(decodedRow, for: HashedBytes(rowBytes), into: &state.entries)
+            guard isNew else { return nil }
             return (row: storedRow, callbacks: Array(state.insertCallbacks.values))
         }
 
@@ -191,10 +197,12 @@ public final class TableCache<T: Decodable & Sendable>: SpacetimeTableCacheProto
             let deletedRow = state.entries.values[index].value
             if state.entries.values[index].count <= 1 {
                 state.entries.remove(at: index)
+                guard !state.deleteCallbacks.isEmpty else { return nil }
+                return (row: deletedRow, callbacks: Array(state.deleteCallbacks.values))
             } else {
                 state.entries.values[index].count -= 1
+                return nil
             }
-            return (row: deletedRow, callbacks: Array(state.deleteCallbacks.values))
         }
 
         guard let rowAndCallbacks else {
@@ -277,17 +285,17 @@ public final class TableCache<T: Decodable & Sendable>: SpacetimeTableCacheProto
                     return nil
                 }
 
+                Self.materializeEntries(in: &state)
                 var storedRows: [T] = []
                 storedRows.reserveCapacity(rowBytesList.count)
                 for rowBytes in rowBytesList {
                     let row = try decodeRow(rowBytes)
-                    if state.entriesAreMaterialized {
-                        storedRows.append(Self.insert(row, for: HashedBytes(rowBytes), into: &state.entries))
-                    } else {
-                        state.pendingRows.append(PendingRow(bytes: rowBytes, value: row))
-                        storedRows.append(row)
+                    let (storedRow, isNew) = Self.insert(row, for: HashedBytes(rowBytes), into: &state.entries)
+                    if isNew {
+                        storedRows.append(storedRow)
                     }
                 }
+                guard !storedRows.isEmpty else { return nil }
                 return (rows: storedRows, callbacks: Array(state.insertCallbacks.values))
             }
         } catch {
@@ -318,10 +326,12 @@ public final class TableCache<T: Decodable & Sendable>: SpacetimeTableCacheProto
                     let deletedRow = state.entries.values[index].value
                     if state.entries.values[index].count <= 1 {
                         state.entries.remove(at: index)
+                        if !callbacks.isEmpty {
+                            results.append((row: deletedRow, callbacks: callbacks))
+                        }
                     } else {
                         state.entries.values[index].count -= 1
                     }
-                    results.append((row: deletedRow, callbacks: callbacks))
                 }
             }
             return results
@@ -395,6 +405,101 @@ public final class TableCache<T: Decodable & Sendable>: SpacetimeTableCacheProto
         }
     }
 
+    /// Reconciles cached rows against a fresh set of subscription rows in a single pass.
+    ///
+    /// Existing rows present in `rowBytesList` are retained without firing delete/insert callbacks,
+    /// with their refcount updated to match the number of occurrences in `rowBytesList`.
+    /// Rows no longer present are evicted (firing `onDelete`), and newly added rows are decoded
+    /// and inserted (firing `onInsert`).
+    @discardableResult
+    public func reconcile(rowBytesList: [Data]) throws -> Bool {
+        let isEmpty = state.withLock { state in
+            state.entries.isEmpty && state.pendingRows.isEmpty
+        }
+        if isEmpty {
+            guard !rowBytesList.isEmpty else { return false }
+            try handleBulkInsert(rowBytesList: rowBytesList)
+            return true
+        }
+
+        let callbacksToFire: (
+            deletedRows: [T],
+            deleteCallbacks: [@Sendable (T) -> Void],
+            insertedRows: [T],
+            insertCallbacks: [@Sendable (T) -> Void]
+        )
+        do {
+            callbacksToFire = try state.withLock { state in
+                Self.materializeEntries(in: &state)
+
+                var newEntries: [HashedBytes: RowEntry<T>] = [:]
+                newEntries.reserveCapacity(rowBytesList.count)
+
+                let hasInsertCallbacks = !state.insertCallbacks.isEmpty
+                var insertedRows: [T] = []
+                if hasInsertCallbacks {
+                    insertedRows.reserveCapacity(rowBytesList.count)
+                }
+
+                for rowBytes in rowBytesList {
+                    let key = HashedBytes(rowBytes)
+                    if let existingNewIndex = newEntries.index(forKey: key) {
+                        newEntries.values[existingNewIndex].count += 1
+                    } else if let existingOld = state.entries[key], existingOld.count > 0 {
+                        newEntries[key] = RowEntry(count: 1, value: existingOld.value)
+                    } else {
+                        let decoded = try decodeRow(rowBytes)
+                        newEntries[key] = RowEntry(count: 1, value: decoded)
+                        if hasInsertCallbacks {
+                            insertedRows.append(decoded)
+                        }
+                    }
+                }
+
+                let hasDeleteCallbacks = !state.deleteCallbacks.isEmpty
+                var deletedRows: [T] = []
+                if hasDeleteCallbacks {
+                    for (oldKey, oldEntry) in state.entries where oldEntry.count > 0 {
+                        if newEntries[oldKey] == nil {
+                            deletedRows.append(oldEntry.value)
+                        }
+                    }
+                }
+
+                if newEntries.isEmpty {
+                    state.entries.removeAll(keepingCapacity: true)
+                    state.pendingRows.removeAll(keepingCapacity: true)
+                    state.entriesAreMaterialized = false
+                } else {
+                    state.entries = newEntries
+                    state.entriesAreMaterialized = true
+                }
+
+                return (
+                    deletedRows: deletedRows,
+                    deleteCallbacks: hasDeleteCallbacks ? Array(state.deleteCallbacks.values) : [],
+                    insertedRows: insertedRows,
+                    insertCallbacks: hasInsertCallbacks ? Array(state.insertCallbacks.values) : []
+                )
+            }
+        } catch {
+            Log.cache.error("Failed to decode row for table '\(self.tableName)': \(error.localizedDescription)")
+            throw error
+        }
+
+        for row in callbacksToFire.deletedRows {
+            for callback in callbacksToFire.deleteCallbacks {
+                callback(row)
+            }
+        }
+        for row in callbacksToFire.insertedRows {
+            for callback in callbacksToFire.insertCallbacks {
+                callback(row)
+            }
+        }
+        return true
+    }
+
     public func clear() {
         state.withLock { state in
             state.entries.removeAll(keepingCapacity: true)
@@ -455,19 +560,13 @@ public final class TableCache<T: Decodable & Sendable>: SpacetimeTableCacheProto
     /// Internal method to generate a flattened snapshot of all rows in deterministic order.
     private func snapshot() -> [T] {
         state.withLock { state in
-            if !state.entriesAreMaterialized {
-                return state.pendingRows.map(\.value)
-            }
-
+            // One element per distinct row. An entry's count is a refcount for overlapping
+            // subscriptions, not a multiplicity (as in the TypeScript SDK's `iter()`).
+            Self.materializeEntries(in: &state)
             var flattened: [T] = []
-            flattened.reserveCapacity(state.entries.count) // Baseline capacity
-            for entry in state.entries.values {
-                if entry.count > 0 {
-                    flattened.reserveCapacity(flattened.count + entry.count)
-                    for _ in 0..<entry.count {
-                        flattened.append(entry.value)
-                    }
-                }
+            flattened.reserveCapacity(state.entries.count)
+            for entry in state.entries.values where entry.count > 0 {
+                flattened.append(entry.value)
             }
             return flattened
         }

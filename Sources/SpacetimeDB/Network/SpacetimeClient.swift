@@ -184,6 +184,14 @@ public final class SpacetimeClient: @unchecked Sendable, WebSocketTransportDeleg
     // Send queue — NWWebSocketTransport handles its own internal queuing but we maintain 
     // a simplified queue to preserve ordering and handle connection lifecycle.
     private var sendQueue: [Data] = []
+    /// Tables whose cached rows the next subscription rows replace (set on every connect).
+    private var tablesToRefresh: Set<String> = []
+    /// Request IDs of managed subscriptions replayed during the current reconnect pass.
+    private var pendingReconnectRequestIds: Set<RequestId> = []
+    /// Buffered `QueryRows` payloads from replayed subscriptions awaiting full batch completion.
+    private var pendingReconnectQueryRows: [QueryRows] = []
+    /// Buffered incremental `TransactionUpdate`s received while a reconnect replay batch is still in flight.
+    private var pendingReconnectTransactionUpdates: [TransactionUpdate] = []
     private var isTransportReady = false
     private var networkMonitor: NetworkMonitor?
     private let keepAlivePingInterval: Duration
@@ -294,6 +302,9 @@ public final class SpacetimeClient: @unchecked Sendable, WebSocketTransportDeleg
             pendingSubscriptionByRequestId.removeAll()
             pendingUnsubscribeByRequestId.removeAll()
             activeSubscriptionByQuerySetId.removeAll()
+            pendingReconnectRequestIds.removeAll()
+            pendingReconnectQueryRows.removeAll()
+            pendingReconnectTransactionUpdates.removeAll()
             return (procedureCallbacks, queryCallbacks)
         }
 
@@ -329,6 +340,9 @@ public final class SpacetimeClient: @unchecked Sendable, WebSocketTransportDeleg
             pendingSubscriptionByRequestId.removeAll()
             pendingUnsubscribeByRequestId.removeAll()
             activeSubscriptionByQuerySetId.removeAll()
+            pendingReconnectRequestIds.removeAll()
+            pendingReconnectQueryRows.removeAll()
+            pendingReconnectTransactionUpdates.removeAll()
             let managed = managedSubscriptions.values
             managedSubscriptions.removeAll()
             return (procedureCallbacks, queryCallbacks, managed)
@@ -659,22 +673,17 @@ public final class SpacetimeClient: @unchecked Sendable, WebSocketTransportDeleg
             return
         }
         let queries = tables.map { "SELECT * FROM \($0)" }
-        let sub = Subscribe(
-            queryStrings: queries,
-            requestId: allocateRequestId(),
-            querySetId: allocateQuerySetId()
-        )
-        let message = ClientMessage.subscribe(sub)
-        send(message)
+        _ = subscribe(queries: queries)
     }
 
-    private func startSubscription(_ handle: SubscriptionHandle) {
+    @discardableResult
+    private func startSubscription(_ handle: SubscriptionHandle) -> RequestId? {
         guard !handle.queries.isEmpty else {
             handle.markError("Subscription requires at least one query.")
             _ = withStateLock {
                 managedSubscriptions.removeValue(forKey: ObjectIdentifier(handle))
             }
-            return
+            return nil
         }
 
         let requestId = allocateRequestId()
@@ -684,6 +693,7 @@ public final class SpacetimeClient: @unchecked Sendable, WebSocketTransportDeleg
             pendingSubscriptionByRequestId[requestId] = handle
         }
         send(ClientMessage.subscribe(Subscribe(queryStrings: handle.queries, requestId: requestId, querySetId: querySetId)))
+        return requestId
     }
 
     private func allocateRequestId() -> RequestId {
@@ -770,19 +780,79 @@ public final class SpacetimeClient: @unchecked Sendable, WebSocketTransportDeleg
                 invokeDelegateCallback(named: "delegate.on_identity_received") {
                     $0.onIdentityReceived(identity: Array(connection.identity.rawBytes), token: connection.token)
                 }
-                subscribeAll(tables: Self.clientCache.registeredTableNames)
+                // Registering a table no longer subscribes to all of its rows: the app's own
+                // subscriptions (`subscribe(queries:)`) decide what the cache holds.
+                withStateLock {
+                    tablesToRefresh = Set(Self.clientCache.registeredTableNames)
+                    pendingReconnectRequestIds.removeAll()
+                    pendingReconnectQueryRows.removeAll()
+                    pendingReconnectTransactionUpdates.removeAll()
+                }
                 resubscribeManagedSubscriptions()
                 invokeDelegateCallback(named: "delegate.on_connect") { $0.onConnect() }
             case .transactionUpdate(let update):
-                Self.clientCache.applyTransactionUpdate(update)
-                notifyRawTransactionUpdateObservers()
-                notifyTransactionUpdate()
+                let wasBuffered = withStateLock { () -> Bool in
+                    guard !pendingReconnectRequestIds.isEmpty else { return false }
+                    pendingReconnectTransactionUpdates.append(update)
+                    return true
+                }
+                if !wasBuffered {
+                    Self.clientCache.applyTransactionUpdate(update)
+                    notifyRawTransactionUpdateObservers()
+                    notifyTransactionUpdate()
+                }
             case .subscribeApplied(let applied):
-                handleSubscribeApplied(applied)
-                let initial = applied.asTransactionUpdate()
-                Self.clientCache.applyTransactionUpdate(initial)
-                notifyRawTransactionUpdateObservers()
-                notifyTransactionUpdate()
+                let handle = handleSubscribeApplied(applied)
+                enum ReconnectDisposition {
+                    case waitingForMoreReplayedSubscriptions
+                    case completedReconnectBatch(queryRowsList: [QueryRows], bufferedUpdates: [TransactionUpdate])
+                    case singleSubscription(staleTables: Set<String>)
+                }
+
+                var coveredNames = Set(applied.rows.tables.map { $0.table.rawValue })
+                if let handle {
+                    coveredNames.formUnion(Self.tableNames(in: handle.queries))
+                }
+
+                let disposition = withStateLock { () -> ReconnectDisposition in
+                    if pendingReconnectRequestIds.remove(applied.requestId) != nil {
+                        pendingReconnectQueryRows.append(applied.rows)
+                        if pendingReconnectRequestIds.isEmpty {
+                            let rows = pendingReconnectQueryRows
+                            let updates = pendingReconnectTransactionUpdates
+                            pendingReconnectQueryRows.removeAll()
+                            pendingReconnectTransactionUpdates.removeAll()
+                            tablesToRefresh.removeAll()
+                            return .completedReconnectBatch(queryRowsList: rows, bufferedUpdates: updates)
+                        }
+                        return .waitingForMoreReplayedSubscriptions
+                    }
+
+                    let stale = coveredNames.intersection(tablesToRefresh)
+                    tablesToRefresh.subtract(stale)
+                    return .singleSubscription(staleTables: stale)
+                }
+
+                switch disposition {
+                case .waitingForMoreReplayedSubscriptions:
+                    break
+                case .completedReconnectBatch(let queryRowsList, let bufferedUpdates):
+                    Self.clientCache.reconcile(queryRowsList: queryRowsList)
+                    for buffered in bufferedUpdates {
+                        Self.clientCache.applyTransactionUpdate(buffered)
+                    }
+                    notifyRawTransactionUpdateObservers()
+                    notifyTransactionUpdate()
+                case .singleSubscription(let staleTables):
+                    if staleTables.isEmpty {
+                        let initial = applied.asTransactionUpdate()
+                        Self.clientCache.applyTransactionUpdate(initial)
+                    } else {
+                        Self.clientCache.reconcile(queryRowsList: [applied.rows], replacingTables: staleTables)
+                    }
+                    notifyRawTransactionUpdateObservers()
+                    notifyTransactionUpdate()
+                }
             case .reducerResult(let reducerResult):
                 handleReducerResult(reducerResult)
             case .other:
@@ -870,7 +940,19 @@ public final class SpacetimeClient: @unchecked Sendable, WebSocketTransportDeleg
         }
     }
 
-    func handleSubscribeApplied(_ applied: SubscribeApplied) {
+    /// The table names in `SELECT * FROM <table> ...` queries, so a table whose subscription
+    /// came back empty is still refreshed.
+    static func tableNames(in queries: [String]) -> Set<String> {
+        Set(queries.compactMap { q -> String? in
+            let words = q.split(whereSeparator: { $0.isWhitespace || $0 == ";" })
+            guard let i = words.firstIndex(where: { $0.uppercased() == "FROM" }), i + 1 < words.count else { return nil }
+            let raw = words[i + 1].trimmingCharacters(in: CharacterSet(charactersIn: "\"`"))
+            return raw.isEmpty ? nil : raw
+        })
+    }
+
+    @discardableResult
+    func handleSubscribeApplied(_ applied: SubscribeApplied) -> SubscriptionHandle? {
         let handle = withStateLock { () -> SubscriptionHandle? in
             let handle = pendingSubscriptionByRequestId.removeValue(forKey: applied.requestId)
             if let handle {
@@ -880,6 +962,7 @@ public final class SpacetimeClient: @unchecked Sendable, WebSocketTransportDeleg
         }
         
         handle?.markApplied(querySetId: applied.querySetId)
+        return handle
     }
 
     func handleUnsubscribeApplied(_ applied: UnsubscribeApplied) {
@@ -944,30 +1027,62 @@ public final class SpacetimeClient: @unchecked Sendable, WebSocketTransportDeleg
     }
 
     func handleSubscriptionError(_ error: SubscriptionError) {
-        let handle: SubscriptionHandle? = withStateLock {
-            if let requestId = error.requestId, let pending = pendingSubscriptionByRequestId.removeValue(forKey: requestId) {
-                managedSubscriptions.removeValue(forKey: ObjectIdentifier(pending))
-                return pending
+        let (handle, completedBatch): (SubscriptionHandle?, (rows: [QueryRows], updates: [TransactionUpdate])?) = withStateLock {
+            var handle: SubscriptionHandle?
+            var batchToFlush: (rows: [QueryRows], updates: [TransactionUpdate])?
+            if let requestId = error.requestId {
+                if let pending = pendingSubscriptionByRequestId.removeValue(forKey: requestId) {
+                    managedSubscriptions.removeValue(forKey: ObjectIdentifier(pending))
+                    handle = pending
+                }
+                if pendingReconnectRequestIds.remove(requestId) != nil, pendingReconnectRequestIds.isEmpty {
+                    batchToFlush = (pendingReconnectQueryRows, pendingReconnectTransactionUpdates)
+                    pendingReconnectQueryRows.removeAll()
+                    pendingReconnectTransactionUpdates.removeAll()
+                    tablesToRefresh.removeAll()
+                }
             }
-            let active = activeSubscriptionByQuerySetId.removeValue(forKey: error.querySetId)
-            if let active {
-                managedSubscriptions.removeValue(forKey: ObjectIdentifier(active))
+            if handle == nil {
+                let active = activeSubscriptionByQuerySetId.removeValue(forKey: error.querySetId)
+                if let active {
+                    managedSubscriptions.removeValue(forKey: ObjectIdentifier(active))
+                }
+                handle = active
             }
-            return active
+            return (handle, batchToFlush)
         }
 
         handle?.markError(error.error)
+
+        if let completedBatch {
+            Self.clientCache.reconcile(queryRowsList: completedBatch.rows)
+            for buffered in completedBatch.updates {
+                Self.clientCache.applyTransactionUpdate(buffered)
+            }
+            notifyRawTransactionUpdateObservers()
+            notifyTransactionUpdate()
+        }
     }
 
     private func resubscribeManagedSubscriptions() {
         let subsToStart = withStateLock {
             activeSubscriptionByQuerySetId.removeAll()
             pendingSubscriptionByRequestId.removeAll()
-            return managedSubscriptions.values.filter { $0.state != .ended }
+            return Array(managedSubscriptions.values.filter { $0.state != .ended })
         }
-        
+
+        var replayedRequestIds = Set<RequestId>()
+        replayedRequestIds.reserveCapacity(subsToStart.count)
         for handle in subsToStart {
-            startSubscription(handle)
+            if let requestId = startSubscription(handle) {
+                replayedRequestIds.insert(requestId)
+            }
+        }
+
+        if !replayedRequestIds.isEmpty {
+            withStateLock {
+                pendingReconnectRequestIds = replayedRequestIds
+            }
         }
     }
 

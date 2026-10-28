@@ -336,6 +336,145 @@ final class NetworkTests: XCTestCase {
         XCTAssertEqual(handle.state, .ended)
     }
 
+    func testTableNamesInSubscriptionQueries() {
+        let names = SpacetimeClient.tableNames(in: [
+            "SELECT * FROM room WHERE code = 'ABCD'",
+            "select * from player where room_id = 7",
+            "SELECT *\nFROM turn;",
+            "SELECT * FROM \"quoted_table\"",
+            "not a query",
+        ])
+        XCTAssertEqual(names, ["room", "player", "turn", "quoted_table"])
+    }
+
+    @MainActor
+    func testSubscribeAppliedReturnsItsHandle() {
+        let client = SpacetimeClient(serverUrl: URL(string: "http://localhost:3000")!, moduleName: "test-module")
+        let handle = client.subscribe(queries: ["SELECT * FROM player"])
+        let applied = SubscribeApplied(requestId: RequestId(rawValue: 1), querySetId: QuerySetId(rawValue: 78), rows: QueryRows(tables: []))
+        XCTAssertTrue(client.handleSubscribeApplied(applied) === handle)
+    }
+
+    @MainActor
+    func testReconnectReconcilesOverlappingSubscriptionsWithoutGhostRows() throws {
+        struct RoomRow: Codable, Equatable, Sendable {
+            var id: UInt32
+            var phase: String
+        }
+        let tableName = "ReconnectTestRoom_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+        let roomCache = TableCache<RoomRow>(tableName: tableName)
+        SpacetimeClient.clientCache.registerTable(name: tableName, cache: roomCache)
+        defer {
+            SpacetimeClient.clientCache.clear(tables: [tableName])
+        }
+
+        let encoder = BSATNEncoder()
+        let lobbyBytes = try encoder.encode(RoomRow(id: 1, phase: "lobby"))
+        let dealingBytes = try encoder.encode(RoomRow(id: 1, phase: "dealing"))
+        let bonusBytes = try encoder.encode(RoomRow(id: 2, phase: "bonus"))
+
+        let client = SpacetimeClient(serverUrl: URL(string: "http://localhost:3000")!, moduleName: "test-module")
+        let initial1 = InitialConnection(
+            identity: Identity(rawBytes: Data(repeating: 0xAB, count: 32)),
+            connectionId: ClientConnectionId(rawBytes: Data(repeating: 0xCD, count: 16)),
+            token: "token-1"
+        )
+        client._test_deliverServerMessage(.initialConnection(initial1))
+
+        let sub1 = client.subscribe(queries: ["SELECT * FROM \(tableName)"])
+        let sub2 = client.subscribe(queries: ["SELECT * FROM \(tableName) WHERE id >= 1"])
+        XCTAssertEqual(sub1.state, .pending)
+        XCTAssertEqual(sub2.state, .pending)
+
+        client._test_deliverServerMessage(
+            .subscribeApplied(
+                SubscribeApplied(
+                    requestId: RequestId(rawValue: 1),
+                    querySetId: QuerySetId(rawValue: 1),
+                    rows: QueryRows(tables: [
+                        SingleTableRows(
+                            table: RawIdentifier(rawValue: tableName),
+                            rows: BsatnRowList(sizeHint: .rowOffsets([0]), rowsData: lobbyBytes)
+                        )
+                    ])
+                )
+            )
+        )
+        client._test_deliverServerMessage(
+            .subscribeApplied(
+                SubscribeApplied(
+                    requestId: RequestId(rawValue: 2),
+                    querySetId: QuerySetId(rawValue: 2),
+                    rows: QueryRows(tables: [
+                        SingleTableRows(
+                            table: RawIdentifier(rawValue: tableName),
+                            rows: BsatnRowList(sizeHint: .rowOffsets([0]), rowsData: lobbyBytes)
+                        )
+                    ])
+                )
+            )
+        )
+        roomCache.sync()
+        XCTAssertEqual(roomCache.rows, [RoomRow(id: 1, phase: "lobby")])
+
+        // Simulate a reconnect where room 1 transitioned from "lobby" to "dealing" while offline,
+        // and sub1 + sub2 are replayed (allocated requestIds 3 and 4).
+        let initial2 = InitialConnection(
+            identity: Identity(rawBytes: Data(repeating: 0xAB, count: 32)),
+            connectionId: ClientConnectionId(rawBytes: Data(repeating: 0xEF, count: 16)),
+            token: "token-2"
+        )
+        client._test_deliverServerMessage(.initialConnection(initial2))
+
+        let reqIds = Set([sub1.requestId, sub2.requestId].compactMap { $0 })
+        XCTAssertEqual(reqIds.count, 2)
+
+        if let req1 = sub1.requestId, let qs1 = sub1.querySetId {
+            client._test_deliverServerMessage(
+                .subscribeApplied(
+                    SubscribeApplied(
+                        requestId: req1,
+                        querySetId: qs1,
+                        rows: QueryRows(tables: [
+                            SingleTableRows(
+                                table: RawIdentifier(rawValue: tableName),
+                                rows: BsatnRowList(sizeHint: .rowOffsets([0]), rowsData: dealingBytes)
+                            )
+                        ])
+                    )
+                )
+            )
+        }
+        if let req2 = sub2.requestId, let qs2 = sub2.querySetId {
+            var combined = Data()
+            combined.append(dealingBytes)
+            combined.append(bonusBytes)
+            client._test_deliverServerMessage(
+                .subscribeApplied(
+                    SubscribeApplied(
+                        requestId: req2,
+                        querySetId: qs2,
+                        rows: QueryRows(tables: [
+                            SingleTableRows(
+                                table: RawIdentifier(rawValue: tableName),
+                                rows: BsatnRowList(
+                                    sizeHint: .rowOffsets([0, UInt64(dealingBytes.count)]),
+                                    rowsData: combined
+                                )
+                            )
+                        ])
+                    )
+                )
+            )
+        }
+
+        roomCache.sync()
+        XCTAssertEqual(roomCache.rows.count, 2)
+        XCTAssertFalse(roomCache.rows.contains(RoomRow(id: 1, phase: "lobby")))
+        XCTAssertTrue(roomCache.rows.contains(RoomRow(id: 1, phase: "dealing")))
+        XCTAssertTrue(roomCache.rows.contains(RoomRow(id: 2, phase: "bonus")))
+    }
+
     @MainActor
     func testSubscriptionErrorEndsHandleAndCallsErrorCallback() {
         let client = SpacetimeClient(serverUrl: URL(string: "http://localhost:3000")!, moduleName: "test-module")
