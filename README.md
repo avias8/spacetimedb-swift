@@ -21,6 +21,7 @@ Native Swift SDK for connecting to SpacetimeDB over `v2.bsatn.spacetimedb`, deco
 - [Logging](#logging)
 - [Benchmarks](#benchmarks)
 - [Validation Matrix](#validation-matrix)
+- [Roadmap](ROADMAP.md)
 - [License](#license)
 
 ## Requirements

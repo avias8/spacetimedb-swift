@@ -1,0 +1,104 @@
+# SpacetimeDB Swift SDK Roadmap (`v0.24` → `v1.0`)
+
+This document tracks the 8–10 month engineering roadmap for `spacetimedb-swift`, progressing from `v0.24.0` to a production-hardened, cross-platform `v1.0.0` release with full SpacetimeDB protocol and ecosystem parity.
+
+```mermaid
+flowchart LR
+    P1["Months 1–2: v0.25<br/>v3 Wire Protocol & Per-Query Cache"] --> P2["Months 3–4: v0.26<br/>Primary Keys, B-Tree Indexes & Typed Queries"]
+    P2 --> P3["Months 5–6: v0.27<br/>Swift Macros, SPM Build Plugin & SwiftUI"]
+    P3 --> P4["Months 7–8: v0.28<br/>Offline Cache, Confirmed Reads & Outbox"]
+    P4 --> P5["Months 9–10: v1.0<br/>Cross-Platform Swift & Upstream Monorepo"]
+```
+
+---
+
+## Completed Baseline (`v0.24.0`)
+
+- [x] `v2.bsatn.spacetimedb` WebSocket transport over `Network.framework` (`NWWebSocketTransport`) with frame reassembly and Gzip/Brotli compression.
+- [x] Swift 6 strict concurrency (`Sendable`, `Mutex<State>`, `@MainActor` coalesced `@Observable` table snapshots).
+- [x] Explicit subscriptions by default on connect, with managed reconnect replay (`subscribe(queries:)` and `subscribeAll(tables:)`).
+- [x] Refcounted `TableCache` deduplication and `0 -> 1` / `1 -> 0` delta callbacks (`onInsert`, `onDelete`, `onUpdate`).
+- [x] TypeScript SDK-style reconnect reconciliation (`TableCache.reconcile(rowBytesList:)` and `ClientCache.reconcile(queryRowsList:replacingTables:)`).
+
+---
+
+## Phase 1: `v3` Wire Protocol & Per-Query Storage (`v0.25` — Months 1–2)
+
+**Goal:** Achieve wire-protocol parity with the official Rust and TypeScript 2.13+ SDKs and isolate cache state per connection and per query set.
+
+- [ ] **WebSocket `v3` Protocol & Frame Batching**
+  - [ ] Negotiate `v3` WebSocket subprotocol alongside `v2.bsatn.spacetimedb`.
+  - [ ] Implement bounded multi-message outbound frame batching (`MAX_V3_OUTBOUND_FRAME_BYTES`) with same-turn coalescing and deferred yield flushes.
+  - [ ] Implement streaming `v3` multi-message inbound frame decoding.
+- [ ] **Per-Query-Set Cache Tracking**
+  - [ ] Track row membership by `QuerySetId` inside `ClientCache` and `TableCache`.
+  - [ ] Deterministically evict rows belonging to a failed or unsubscribed `QuerySetId` without requiring server-sent dropped rows or connection resets.
+- [ ] **Instance-Scoped `ClientCache`**
+  - [ ] Introduce connection-scoped `ClientCache` / `DbContext` instances on `SpacetimeClient` while preserving `SpacetimeClient.clientCache` as a backwards-compatible default.
+  - [ ] Support concurrent independent `SpacetimeClient` connections to multiple modules or rooms in the same process.
+
+---
+
+## Phase 2: Primary Keys, Client-Side Indexes & Typed Query Builder (`v0.26` — Months 3–4)
+
+**Goal:** Deliver sub-millisecond indexed lookups, primary-key identity semantics, and compile-time checked subscription queries.
+
+- [ ] **Primary-Key Identity & Semantic `onUpdate` Pairing**
+  - [ ] Add `SpacetimePrimaryKeyRow` protocol and generated primary-key extractors.
+  - [ ] Key `TableCache` entries by primary key when available (matching Rust's `with_updates_by_pk` and TypeScript's `hasPrimaryKey`).
+  - [ ] Pair delete+insert operations sharing a primary key into `onUpdate(oldRow, newRow)` callbacks across both incremental transactions and reconnect reconciliations.
+- [ ] **Client-Side Unique & B-Tree Ranged Indexes**
+  - [ ] Implement `UniqueIndex<Row, Key>` supporting $O(1)$ `.find(_:)` lookups.
+  - [ ] Implement `BTreeIndex<Row, Key>` supporting $O(\log N)$ `.filter(range:)` prefix and range scans.
+  - [ ] Automatically maintain index structures during `TableCache` insert, delete, update, and reconnect reconciliation passes.
+- [ ] **Type-Safe Query Builder DSL**
+  - [ ] Provide a Swift `KeyPath`-based query builder (e.g., `Person.where { $0.roomId == 7 && $0.isReady == true }`).
+  - [ ] Compile typed expressions into parameterized SQL subscription strings.
+
+---
+
+## Phase 3: Zero-Step Codegen (SPM Plugin + Swift Macros) & SwiftUI Ergonomics (`v0.27` — Months 5–6)
+
+**Goal:** Eliminate manual codegen steps in Xcode/SPM projects and provide first-class SwiftUI and `AsyncSequence` primitives.
+
+- [ ] **Swift Package Manager Build Tool Plugin (`SpacetimeDBCodegenPlugin`)**
+  - [ ] Generate typed Swift tables, reducers, and procedures automatically during `swift build` / Xcode builds from module schema definitions.
+  - [ ] Add schema drift detection and actionable compiler diagnostics.
+- [ ] **Swift 6 Macros (`@SpacetimeTable`, `@SpacetimeRow`, `@SpacetimeEnum`)**
+  - [ ] Synthesize zero-copy `BSATNSpecialDecodable` and `BSATNSpecialEncodable` conformances at compile time.
+  - [ ] Synthesize primary-key and index accessors directly from struct annotations.
+- [ ] **SwiftUI Property Wrappers & Structured Concurrency Streams**
+  - [ ] Add `@SpacetimeQuery` property wrapper for SwiftUI views with automatic view-lifecycle `subscribe()` / `unsubscribe()` management and fine-grained observation.
+  - [ ] Expose `AsyncSequence` streams for table events (`table.inserts`, `table.deletes`, `table.updates`) and connection lifecycle (`client.connectionStates`).
+
+---
+
+## Phase 4: Confirmed Reads, Optimistic Mutations & Persistent Offline Cache (`v0.28` — Months 7–8)
+
+**Goal:** Built-in mobile resilience for flaky networks, instant cold-start rendering, and latency-masked reducer calls.
+
+- [ ] **`lightMode` & `confirmedReads` Connection Options**
+  - [ ] Support `lightMode` query parameter negotiation to minimize bandwidth on cellular/watchOS connections.
+  - [ ] Support `confirmedReads` negotiation for durability-sensitive client workflows.
+- [ ] **Optimistic Reducer Predictions & Rollback**
+  - [ ] Allow registering optimistic local cache mutations alongside `send(reducer:args:)`.
+  - [ ] Automatically commit or roll back optimistic mutations when `ReducerResult` arrives (`.ok` vs `.err` / `.internalError`) or on disconnect.
+- [ ] **Disk-Backed Cache Snapshots**
+  - [ ] Add opt-in BSATN snapshot persistence to disk per module/query-set.
+  - [ ] Hydrate `ClientCache` synchronously on cold launch and seamlessly diff against live server state via `ClientCache.reconcile(queryRowsList:replacingTables:)` once connected.
+
+---
+
+## Phase 5: Cross-Platform Swift, Chaos Harness & Upstream `1.0` (`v1.0.0` — Months 9–10)
+
+**Goal:** Expand beyond Apple platforms to Linux/Windows/Android, prove reliability under chaos testing, and land upstream in `clockworklabs/SpacetimeDB`.
+
+- [ ] **Cross-Platform WebSocket Transport**
+  - [ ] Provide a `URLSessionWebSocketTask` / `SwiftNIO` transport backend behind `WebSocketTransport` alongside `NWWebSocketTransport`.
+  - [ ] Add CI targets for Linux (`ubuntu-latest`), Windows, tvOS, and Swift-on-Android.
+- [ ] **Deterministic Chaos & Soak Testing Suite**
+  - [ ] Build an automated multi-client chaos harness simulating mid-stream socket drops, packet fragmentation, subscription errors, and 60 Hz reducer streams against a live SpacetimeDB server in CI.
+  - [ ] Enforce automated benchmark regression gates in CI against `Benchmarks/Baselines`.
+- [ ] **Upstream Monorepo Integration & `1.0` API Lock**
+  - [ ] Upstream `spacetime generate --lang swift` and `sdks/swift` into `clockworklabs/SpacetimeDB`.
+  - [ ] Complete DocC tutorials, migration guides, and semantic versioning stability guarantees for `1.0.0`.
