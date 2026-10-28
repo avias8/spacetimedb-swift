@@ -11,8 +11,7 @@ let package = Package(
         .package(name: "spacetimedb-swift", path: ".."),
         .package(
             url: "https://github.com/ordo-one/benchmark",
-            from: "1.30.0",
-            traits: []
+            from: "1.30.0"
         ),
     ],
     targets: [
