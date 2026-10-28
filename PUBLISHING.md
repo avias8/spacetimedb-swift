@@ -45,6 +45,6 @@ Consumer dependency:
 ```swift
 .package(
     url: "https://github.com/avias8/spacetimedb-swift.git",
-    from: "0.23.0"
+    from: "0.24.0"
 )
 ```

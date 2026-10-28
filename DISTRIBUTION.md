@@ -10,7 +10,7 @@ Releases use semantic version tags in the form `vX.Y.Z`.
 - Use a patch release for compatible fixes.
 - Keep the package dependency snippet, changelog, and release notes on the same version.
 
-The current release is `0.23.0`.
+The current release is `0.24.0`.
 
 ## Preflight
 
@@ -44,7 +44,7 @@ The root package intentionally has no third-party dependencies and therefore doe
 5. Publish matching GitHub release notes.
 
 ```bash
-export VERSION="0.23.0"
+export VERSION="0.24.0"
 
 git switch main
 git pull --ff-only origin main

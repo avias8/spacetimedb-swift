@@ -1,13 +1,13 @@
 # Swift Package Index Release Checklist
 
-The package is listed at <https://swiftpackageindex.com/avias8/spacetimedb-swift>. Use this checklist for `0.23.0` and later releases.
+The package is listed at <https://swiftpackageindex.com/avias8/spacetimedb-swift>. Use this checklist for `0.24.0` and later releases.
 
 ## Release Inputs
 
 ```bash
 export SPI_OWNER="avias8"
 export SPI_REPO="spacetimedb-swift"
-export SPI_VERSION="0.23.0"
+export SPI_VERSION="0.24.0"
 ```
 
 ## Repository Readiness

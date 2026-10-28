@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.24.0 - 2026-10-27
+
+- Remove implicit `subscribeAll(tables:)` on `InitialConnection` so explicit client subscriptions govern local cache replication by default, while routing explicit `subscribeAll(tables:)` calls through managed subscriptions for automatic reconnect replay.
+- Deduplicate `TableCache.rows` across overlapping subscriptions so `RowEntry.count` acts as a subscription reference count rather than row multiplicity.
+- Make `TableCache` `onInsert` and `onDelete` delta callbacks refcount-aware (`0 -> 1` and `1 -> 0`), matching the Rust and TypeScript SDKs.
+- Add `TableCache.reconcile(rowBytesList:)`, `ClientCache.reconcile(queryRowsList:replacingTables:)`, and `ClientCache.clear(tables:)` to diff cached rows against replayed subscription snapshots on reconnect without ghost rows, redundant BSATN decoding, or duplicate callbacks.
+- Batch replayed subscriptions across `resubscribeManagedSubscriptions()` in `SpacetimeClient` and buffer mid-replay `TransactionUpdate`s so multi-subscription reconnects reconcile atomically.
+
 ## 0.23.0 - 2026-07-17
 
 - Update the Swift SDK release line for compatibility with SpacetimeDB 2.7.0.
