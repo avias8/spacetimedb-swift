@@ -1,6 +1,6 @@
 # SpacetimeDB Swift SDK
 
-Native Swift SDK for connecting to SpacetimeDB over `v2.bsatn.spacetimedb`, decoding realtime updates, and maintaining a typed local cache.
+Native Swift SDK for connecting to SpacetimeDB over `v3.bsatn.spacetimedb` and `v2.bsatn.spacetimedb`, decoding realtime updates with zero-copy BSATN codecs, and maintaining a typed, indexed local cache.
 
 [![Swift Package Index](https://img.shields.io/badge/Swift%20Package%20Index-spacetimedb--swift-orange)](https://swiftpackageindex.com/avias8/spacetimedb-swift)
 [![Swift Versions](https://img.shields.io/endpoint?url=https://swiftpackageindex.com/api/packages/avias8/spacetimedb-swift/badge?type=swift-versions)](https://swiftpackageindex.com/avias8/spacetimedb-swift)
@@ -13,6 +13,10 @@ Native Swift SDK for connecting to SpacetimeDB over `v2.bsatn.spacetimedb`, deco
 - [Add The SDK To A Swift Package](#add-the-sdk-to-a-swift-package)
 - [Quick Start](#quick-start)
 - [Core API](#core-api)
+- [Primary Keys, Client Indexes, and Typed Queries](#primary-keys-client-indexes-and-typed-queries)
+- [SwiftUI `@SpacetimeQuery` and `AsyncSequence` Streams](#swiftui-spacetimequery-and-asyncsequence-streams)
+- [Optimistic Mutations and Persistent Cache Snapshots](#optimistic-mutations-and-persistent-cache-snapshots)
+- [Zero-Step Build Tool Plugin (`SpacetimeDBCodegenPlugin`)](#zero-step-build-tool-plugin-spacetimedbcodegenplugin)
 - [Auth Token Persistence (Keychain)](#auth-token-persistence-keychain)
 - [Network Awareness And Reconnect Behavior](#network-awareness-and-reconnect-behavior)
 - [Distribution Hardening](#distribution-hardening)
@@ -30,6 +34,7 @@ Native Swift SDK for connecting to SpacetimeDB over `v2.bsatn.spacetimedb`, deco
 - Apple platforms:
   - macOS `15+`
   - iOS `18+`
+  - tvOS `18+`
   - visionOS `2+`
   - watchOS `11+`
 
@@ -39,6 +44,7 @@ Native Swift SDK for connecting to SpacetimeDB over `v2.bsatn.spacetimedb`, deco
 spacetimedb-swift
 ├── Package.swift
 ├── Benchmarks/Package.swift
+├── Plugins/SpacetimeDBCodegenPlugin
 ├── Sources/SpacetimeDB
 │   ├── Auth/KeychainTokenStore.swift
 │   ├── BSATN/
@@ -203,14 +209,123 @@ handle.unsubscribe()
 
 ### Client Cache
 
-Register tables once, then read typed rows from generated caches:
+Register tables once, then read typed rows from generated caches (either the default shared cache or an instance-scoped `client.cache`):
 
 ```swift
-SpacetimeModule.registerTables()
-let people = PersonTable.cache.rows
+SpacetimeModule.registerTables(in: client.cache)
+let people = PersonTable.cache(in: client.cache).rows
 ```
 
-The SDK applies transaction updates into `SpacetimeClient.clientCache`. Internal cache mutation remains off the main actor; observable `rows` snapshots are coalesced and published on the main actor for SwiftUI safety.
+The SDK applies transaction updates into the client's `ClientCache`. Internal cache mutation remains off the main actor; observable `rows` snapshots are coalesced and published on the main actor for SwiftUI safety.
+
+## Primary Keys, Client Indexes, and Typed Queries
+
+### Primary-Key Updates & O(1) Lookups
+
+Rows conforming to `SpacetimePrimaryKeyRow` automatically pair delete+insert transitions sharing a primary key into `onUpdate(oldRow, newRow)` callbacks across both live transactions and reconnect reconciliations:
+
+```swift
+let table = PersonTable.cache(in: client.cache)
+if let player = table.find(byPrimaryKey: 42) {
+    print("Found \(player.name)")
+}
+```
+
+### Unique and B-Tree Ranged Indexes
+
+Create secondary client-side indexes that stay automatically synchronized with the table cache:
+
+```swift
+let emailIndex = table.createUniqueIndex(named: "email", keyPath: \.email)
+let user = emailIndex.find("alice@example.com")
+
+let scoreIndex = table.createBTreeIndex(named: "score", keyPath: \.score)
+let topPlayers = scoreIndex.filter(from: 1000, through: 5000)
+```
+
+### Type-Safe Query Builder DSL
+
+Build parameterized SQL subscriptions using Swift `KeyPath`s:
+
+```swift
+let query = Person.query.where { $0.roomId == 7 && $0.isReady == true }
+let handle = client.subscribe(query: query)
+```
+
+## SwiftUI `@SpacetimeQuery` and `AsyncSequence` Streams
+
+### `@SpacetimeQuery`
+
+Bind a SwiftUI view directly to a table cache or a typed `TableQuery` with automatic subscription lifecycle management:
+
+```swift
+struct RoomPlayersView: View {
+    @SpacetimeQuery(Person.query.where { $0.roomId == 7 })
+    private var players: [Person]
+
+    var body: some View {
+        List(players) { player in
+            Text(player.name)
+        }
+    }
+}
+```
+
+### `AsyncSequence` Streams
+
+Consume table mutations and connection state transitions using structured concurrency:
+
+```swift
+Task {
+    for await (oldPlayer, newPlayer) in table.updates {
+        print("\(oldPlayer.name) -> \(newPlayer.name)")
+    }
+}
+
+Task {
+    for await state in client.connectionStates {
+        print("Connection state: \(state)")
+    }
+}
+```
+
+## Optimistic Mutations and Persistent Cache Snapshots
+
+### Optimistic Reducer Predictions
+
+Apply immediate local cache mutations alongside a reducer call; the SDK automatically commits or rolls back the prediction when the server responds or disconnects:
+
+```swift
+try client.send(
+    "move_player",
+    argsData,
+    optimisticChanges: [
+        .update(tableName: "person", oldRow: currentPlayer, newRow: predictedPlayer)
+    ]
+)
+```
+
+### Disk-Backed Cache Snapshots
+
+Persist and hydrate BSATN cache snapshots on cold launch, then reconcile seamlessly when the live subscription connects:
+
+```swift
+try client.cache.saveSnapshot(to: snapshotFileURL)
+
+// On next launch:
+try client.cache.loadSnapshot(from: snapshotFileURL)
+```
+
+## Zero-Step Build Tool Plugin (`SpacetimeDBCodegenPlugin`)
+
+Attach `SpacetimeDBCodegenPlugin` to any target containing a `spacetimedb-codegen.json` configuration file to invoke `spacetime generate --lang swift` automatically during `swift build` or Xcode builds:
+
+```json
+{
+  "modulePath": "../server-module",
+  "outputDirectory": "Sources/MyApp/Generated"
+}
+```
 
 ## Auth Token Persistence (Keychain)
 

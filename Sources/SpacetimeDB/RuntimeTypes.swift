@@ -38,7 +38,7 @@ public struct TimeDurationMicros: Codable, Sendable, Hashable, RawRepresentable 
     public init(rawValue: UInt64) { self.rawValue = rawValue }
 }
 
-public enum ScheduleAt: Codable, Sendable {
+public enum ScheduleAt: Codable, Sendable, Hashable {
     case interval(UInt64)
     case time(UInt64)
 }
@@ -47,6 +47,9 @@ public enum SpacetimeResult<Ok: Codable & Sendable, Err: Codable & Sendable>: Co
     case ok(Ok)
     case err(Err)
 }
+
+extension SpacetimeResult: Equatable where Ok: Equatable, Err: Equatable {}
+extension SpacetimeResult: Hashable where Ok: Hashable, Err: Hashable {}
 
 extension Identity: BSATNSpecialDecodable {
     public static func decodeBSATN(from reader: inout BSATNReader) throws -> Identity {

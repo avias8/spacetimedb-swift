@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.0 - 2026-10-27
+
+- Add `v3.bsatn.spacetimedb` WebSocket wire protocol negotiation, bounded outbound multi-message frame batching (`WebSocketV3Frames`), and inbound multi-message frame decoding alongside `v2.bsatn.spacetimedb`.
+- Add per-`QuerySetId` row membership tracking and deterministic query-set eviction (`ClientCache.evictQuerySet(_:)`, `TableCache.evictQuerySet(_:)`) on `unsubscribe()` or subscription error.
+- Add instance-scoped `ClientCache` on `SpacetimeClient` (`client.cache`) so multiple `SpacetimeClient` connections can run concurrently in the same process while preserving `SpacetimeClient.clientCache` as the default.
+- Add `SpacetimePrimaryKeyRow` primary-key identity tracking, $O(1)$ `TableCache.find(byPrimaryKey:)`, and automatic `onUpdate(oldRow, newRow)` pairing across incremental transactions and reconnect reconciliations.
+- Add client-side `UniqueIndex<Row, Key>` ($O(1)$ `.find(_:)`) and `BTreeIndex<Row, Key>` ($O(\log N)$ `.filter(from:through:)`, `.filter(from:to:)`).
+- Add `KeyPath`-based `TableQuery<Row>` SQL subscription builder (`SpacetimeQueryableRow`, `SQLColumn`, `SQLPredicate`).
+- Add SwiftUI `@SpacetimeQuery` `DynamicProperty` wrapper and structured concurrency `AsyncSequence` streams (`table.inserts`, `table.deletes`, `table.updates`, `client.connectionStates`).
+- Add `SpacetimeDBCodegenPlugin` SPM build tool plugin, `SpacetimeTableDescriptor`, `@SpacetimePrimaryKey`, `@SpacetimeUniqueIndexed`, `@SpacetimeBTreeIndexed`, and `SpacetimeSchemaValidator`.
+- Add `lightMode` and `confirmedReads` connection options on `SpacetimeClient`.
+- Add optimistic reducer predictions (`OptimisticRowChange`, `client.send(_:_:optimisticChanges:)`) with automatic commit/rollback on `ReducerResult` or disconnect.
+- Add BSATN disk snapshot persistence (`ClientCache.saveSnapshot(to:)`, `ClientCache.loadSnapshot(from:)`).
+- Add pluggable `WebSocketTransport` protocol, `URLSessionWebSocketTransport`, deterministic chaos & soak testing (`ChaosSoakTests`), `tvOS` support, and GitHub Actions CI matrix (`.github/workflows/ci.yml`).
+- Update `spacetime generate --lang swift` in `crates/codegen/src/swift.rs` to emit `SpacetimeTableDescriptor`, `SpacetimePrimaryKeyRow`, `SpacetimeQueryableRow`, instance-scoped `ClientCache` registration, and optimistic/async reducer and procedure overloads.
+
 ## 0.24.0 - 2026-10-27
 
 - Remove implicit `subscribeAll(tables:)` on `InitialConnection` so explicit client subscriptions govern local cache replication by default, while routing explicit `subscribeAll(tables:)` calls through managed subscriptions for automatic reconnect replay.

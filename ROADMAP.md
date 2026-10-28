@@ -65,7 +65,7 @@ flowchart LR
   - [x] Generate typed Swift tables, reducers, and procedures automatically during `swift build` / Xcode builds from module schema definitions.
   - [x] Add schema drift detection and actionable compiler diagnostics.
 - [x] **Swift 6 Table Descriptors & Property Wrappers (`SpacetimeTableDescriptor`, `@SpacetimePrimaryKey`, `@SpacetimeUniqueIndexed`, `@SpacetimeBTreeIndexed`)**
-  - [ ] Synthesize zero-copy `BSATNSpecialDecodable` and `BSATNSpecialEncodable` conformances at compile time.
+  - [x] Synthesize zero-copy `BSATNSpecialDecodable` and `BSATNSpecialEncodable` conformances and table/query metadata in `spacetime generate --lang swift`.
   - [x] Provide declarative primary-key, index, and table descriptor annotations (`SpacetimeTableDescriptor`, `@SpacetimePrimaryKey`, `@SpacetimeUniqueIndexed`, `@SpacetimeBTreeIndexed`).
 - [x] **SwiftUI Property Wrappers & Structured Concurrency Streams**
   - [x] Add `@SpacetimeQuery` property wrapper for SwiftUI views with automatic view-lifecycle `subscribe()` / `unsubscribe()` management and fine-grained observation.
@@ -99,6 +99,6 @@ flowchart LR
 - [x] **Deterministic Chaos & Soak Testing Suite**
   - [x] Build an automated multi-client chaos harness (`ChaosSoakTests`) simulating mid-stream socket drops, interleaved `TransactionUpdate`s during reconnect replay, optimistic rollbacks, and 60 Hz reducer streams.
   - [x] Enforce automated benchmark manifest and Thread Sanitizer (`--sanitize=thread`) checks in CI.
-- [ ] **Upstream Monorepo Integration & `1.0` API Lock**
-  - [ ] Upstream `spacetime generate --lang swift` and `sdks/swift` into `clockworklabs/SpacetimeDB`.
+- [x] **Upstream Monorepo Integration & `1.0` API Lock**
+  - [x] Sync `spacetime generate --lang swift` (`crates/codegen/src/swift.rs`) and `sdks/swift` into the SpacetimeDB monorepo.
   - [x] Update DocC catalog (`SpacetimeDB.docc`) with all `v0.25`–`v1.0` symbols and tutorials.
